@@ -1,34 +1,42 @@
 # BHL Update AWS Item
 
-Updates an item from BHL at AWS S3
+Updates an item from BHL at AWS S3.
+
+BHL maintains a copy of its data at Amazon S3 as part of it's membership in the AWS Open Data Sponsorship Program. This script is meant to update an item's data at AWS to keep it in sync with BHL's metadata.
+
+Usage of this script relies on access to both BHL's API and permission to BHL's content at AWS S3. Data is drawn from the both Internet Archive and BHL.
+
+The script takes into account inconsistencies at the Internet Archive as much as possible to normalize the data being sent to AWS. No changes are made to BHL itself when this script is running.
+
+## Installation
+
+This uses a virtual environment and requires Python 3.13 and libvips for image manipulation.
+
+```
+python -m venv venv
+. venv/bin/activate
+pip install -r requirements.txt
+```
 
 ## Basic Usage
 
 ```
-python -m venv venv  
-. venv/bin/activate
-pip install -r requirements.txt
 python update-aws-item.py [--identifier IDENTIFIER]
 ```
-The script will check for any cached files and update the item at AWS. File uploaded are: (#### is sequence number)
+The script will check for any cached files and update these types of files at AWS:
 
-* JPEG-2000 Page Images: `IDENTIFIER_####.jp2`
-* Web-ready WEBP Images: `IDENTIFIER_####.webp`
-    * `IDENTIFIER_####_full.webp`
-    * `IDENTIFIER_####_large.webp`
-    * `IDENTIFIER_####_medium.webp`
-    * `IDENTIFIER_####_small.webp`
-    * `IDENTIFIER_####_thumb.webp`
-* OCR Files: `IDENTIFIER_####.txt`
-* Combined OCR: `IDENTIFIER.txt`
-* IA Scandata: `IDENTIFIER_scandata.xml`
+* JPEG-2000 Page Images
+* Web-ready Webp Images (5 versions: full-size, large, medium, small and thumbnail)
+* OCR Files (One text file per page)
+* Combined OCR (All OCR files combined into one text file)
+* IA Scandata (page-level metadata)
 
 ## Options
 `--identifier IDENTIFIER`  
 Archive.org identifier for the item.
 
 `--pop FILENAME`  
-FILENAME is a list of identifiers. This option reads and removes the first line of the file and uses it as the identifier to be processed.
+FILENAME is a list of identifiers. Reads and removes the first line of the file and uses it as the identifier to be processed.
 
 `-i`, `--images-only`  
 Download JP2 images from IA, convert to WebP, send to AWS. This will prefer the locally cached IDENTIFIER_jp2.zip. Implies `--scandata-only`
@@ -40,7 +48,7 @@ Downloads OCR file for each page from BHL ansend to AWS. Implies `--fulltext-onl
 Combines all OCR for the item one text file and uploads to AWS.
 
 `--clean`  
-Removes files from the local cache. Does not remove scandata.xml. Download all others from the Internet Archive as needed.
+Removes files from the local cache. Does not remove `scandata.xml`. Downloads all other files from the Internet Archive as needed.
 
 `--stdout`  
 Outputs progress to STDOUT instead of the log file.
@@ -117,11 +125,16 @@ The script needs certain values.
 ## Notes
 
 ### Scandata File
-As much as possible, this script will preserve the locally cached scandata.xml file to prevent it from deviating from the one used by BHL. There are no provisions in the script to remove the scandata file and re-download from the Internet Archive. 
+
+As much as possible, this script will preserve the locally cached `scandata.xml` file to prevent it from deviating from the one used by BHL. There are no provisions in the script to remove the scandata file and re-download from the Internet Archive. 
+
+Therefore, it is important to begin using this script with a full collection of scandata.xml files for all items in BHL.
 
 ### OCR File organization
 
-Since there is a mixed relationship between Items and Parts, OCR files must be accessed in different ways.
+_This section is a reference for those interestd in accessing the OCR content at AWS S3._
+
+Since there is a mixed relationship between Items and Parts/Segments, OCR files must be accessed in different ways.
 
 1. An Item may have no Parts at all
 2. An Item may hafve Parts defined within it
@@ -129,7 +142,7 @@ Since there is a mixed relationship between Items and Parts, OCR files must be a
 
 #### An item with no Parts
 
-An Item that has a `BarCode` in `item.txt` will have an image an an associated OCR file. Example:
+An Item that has a `BarCode` in [item.txt](https://www.biodiversitylibrary.org/Data/TSV/hosted/) will have an image an an associated OCR file. Example:
 
 * **Item ID:** 346951 (https://www.biodiversitylibrary.org/item/346951)  
 * **BarCode:** CAT109916943238207426  
@@ -143,8 +156,7 @@ AWS URLs:
 
 #### An Item that has Parts defined within it
 
-Not all Parts have OCR. If a part does not have a `BarCode` in `part.txt`, it's parent Item will have a `BarCode` in `item.txt` 
-that is used to get the OCR prefixed with `item`. Example:
+Not all Parts have OCR. If a part does not have a `BarCode` in [part.txt](https://www.biodiversitylibrary.org/Data/TSV/hosted/), it's parent Item will have a `BarCode` in `item.txt` that is used to get the OCR prefixed with `item`. Example:
 
 * **Item ID:** 21356 (https://www.biodiversitylibrary.org/item/21356#page/127/mode/1up)  
 * **Part ID:** 248 (https://www.biodiversitylibrary.org/part/248)  
@@ -153,15 +165,15 @@ that is used to get the OCR prefixed with `item`. Example:
 * **Item Sequence:** 127  
 * **Part Sequence:** 1
 
-AWS URLs:
+AWS URLs (note **item-021356** vs **part-000248**):
 
 * https://bhl-open-data.s3.us-east-2.amazonaws.com/images/journalofhymenop12n2inte/journalofhymenop12n2inte_0127.jp2
 * https://bhl-open-data.s3.us-east-2.amazonaws.com/ocr/item-021356/item-021356-02839616-0127.txt
-* https://bhl-open-data.s3.us-east-2.amazonaws.com/ocr/part-000248/part-000248-02839616-0001.txt <-- Does not exist
+* https://bhl-open-data.s3.us-east-2.amazonaws.com/ocr/part-000248/part-000248-02839616-0001.txt **<< Does not exist**
 
 #### A Part that is its own Item
 
-Some Parts do not have parent items. If an part has a `BarCode` in `part.txt` then it will have a correspoding OCR file prefixed with `part`. There is no corresponding OCR for the Item. In `item.txt` these will have a BarCode that looks like `vi210914v100201120250316010124` (regex `/^vi\d{6}v/`)
+Some Parts do not have parent items. If an Part has a `BarCode` in [part.txt](https://www.biodiversitylibrary.org/Data/TSV/hosted/) then it will have a correspoding OCR file prefixed with `part`. There is no corresponding OCR for the Item. In [item.txt](https://www.biodiversitylibrary.org/Data/TSV/hosted/) these will have a BarCode that looks like `vi210914v100201120250316010124` (possible regex: `/^vi\d{6}v/`)
 
 * **Item ID:** 336513 (https://www.biodiversitylibrary.org/itemdetails/336513)  
 * **Part ID:** 98691 (https://www.biodiversitylibrary.org/part/98691)  
@@ -170,20 +182,13 @@ Some Parts do not have parent items. If an part has a `BarCode` in `part.txt` th
 * **Item Sequence:** N/A  
 * **Part Sequence:** 1
 
-AWS URLs:
+AWS URLs (note **item-336513** vs **part-098691**):
 
 * https://bhl-open-data.s3.us-east-2.amazonaws.com/images/giantresinbeema1hino/giantresinbeema1hino_0001.jp2
-* https://bhl-open-data.s3.us-east-2.amazonaws.com/ocr/item-336513/item-336513-064253797-0001.txt <-- Does not exist
+* https://bhl-open-data.s3.us-east-2.amazonaws.com/ocr/item-336513/item-336513-064253797-0001.txt **<< Does not exist**
 * https://bhl-open-data.s3.us-east-2.amazonaws.com/ocr/part-098691/part-098691-064253797-0001.txt 
 
-**Mismatches between BHL and IA**
 
-Example: 
-
-* https://www.biodiversitylibrary.org/item/202277#page/305/mode/thumb (336 pages)
-* https://archive.org/details/wildflowersofbri02adam/page/n342/mode/1up (442 pages)
-
-Need to find and fix all of these at BHL. Could be as many as 3,000 items.
 
 
 
