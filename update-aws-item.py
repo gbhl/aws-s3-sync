@@ -1,0 +1,861 @@
+#!/usr/bin/env python3
+"""
+Update a BHL Item at AWS.
+
+If uploading images, reads scandata.xml and jp2.zip from IA,
+renames JP2 files sequentially when <addToAccessFormats> is true.
+Then converts each JP2 to a variety of smaller sized WebP files.
+
+If uploading scandata,
+"""
+# Exmaple Items for testing
+#   pacificseabirds46paci -- Normal jp2.zip, scandata.xml
+#   narrativeofwhali02bennrich -- scandata.zip, not scandata.xml
+#   0330266.0001.002.umich.edu -- tif.tar images, not jp2.zip
+#   academynewslett00calim -- small item for webp testing
+#   firstnymphimago70 -- Virtual item article, otherwise normal
+#   1042086362MTn -- jp2.zip images aren't named IDENTIFIER_jp2.zip
+
+import sys
+import os
+import logging
+import re
+import pyvips
+import boto3
+import xml.etree.ElementTree as ET
+import zipfile
+import tarfile
+import requests
+import argparse
+import shutil
+import time
+import json
+import urllib
+import toml
+from PopLines import popHead
+from pathlib import Path
+from botocore.exceptions import NoCredentialsError
+from tempfile import mkdtemp
+from random import randint
+from wand.image import Image
+
+# Read the config.toml file
+config_file = Path('config.toml')
+if not config_file.exists():
+    print("config.toml not found.")
+    sys.exit(1)
+
+with open('config.toml', 'r') as f:
+    config = toml.load(f)
+
+# AWS Credentials come from the current user's ~/.aws/credentials file
+# --------------
+s3_session = boto3.Session('default')
+s3_client = boto3.client('s3', aws_session_token=s3_session)
+
+# Set up Logging
+# --------------
+tmp = Path(config['logging']['path'])
+tmp.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    filename=f"{tmp}/{config['logging']['filename']}",
+    format="%(asctime)s: %(module)s (%(levelname)s): %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger("update-aws-item")
+logging.getLogger('pyvips').setLevel(logging.CRITICAL)
+logging.getLogger('requests').setLevel(logging.CRITICAL)
+logging.getLogger('botocore').setLevel(logging.CRITICAL)
+logging.getLogger('boto3').setLevel(logging.CRITICAL)
+logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
+logging.getLogger('urllib3').setLevel(logging.CRITICAL)
+
+# Random sleep to not overwhelm the API
+# --------------
+sleep_time = randint(1,5)
+logger.info(f"Starting up and sleeping for {sleep_time}")
+time.sleep(sleep_time)
+
+# Reduce memory footprint - we don't need a lot of caching
+# --------------
+pyvips.cache_set_max(0)
+
+def get_identifier_by_index(idx):
+    idx = int(idx)
+    input_data = open(config['general']['id_list'], 'r')
+
+    num = 1
+    for row in input_data:
+        if num == idx:
+            identifier = row.rstrip('\n').strip()
+            input_data.close()
+            if identifier == "":
+                return None
+            return identifier
+        num += 1
+    input_data.close()
+    return None
+
+def get_cache_path(identifier, type):
+    """
+    This is used to normalize the paths for where we keep copies of data.
+    Only the "metadata" item is meant to be preserved indefinitely.
+    """
+    # Contains content from https://archive.org/metadata/IDENTIFIER
+    if type == 'metadata':
+        return Path(config['general']['cache_path']) / 'json'
+
+    # Contains content from https://archive.org/IDENTIFIER/IDENTIFIER_scandata.xml
+    # or a renamed scandata.zip/scandata.xml.
+    if type == 'scandata':
+        return Path(config['general']['cache_path']) / 'xml'
+
+    # Guaranteed to contain JP2 files, but not in scandata order.
+    if type == 'images':
+        return Path(config['general']['cache_path']) / 'jp2'
+
+    # Contains item-000000 or part-000000 folders with OCR. Also may contain
+    # the combined OCR as an item-000000.txt file (with no Sequence or PageIDs)
+    if type == 'ocr':
+        return Path(config['general']['cache_path']) / 'ocr'
+
+def get_scandata(identifier):
+    # TODO Modify this to pay attention to mtime and download from IA if what they have is newer
+    scandata_file = get_cache_path(identifier, 'scandata') / f"{identifier}_scandata.xml"
+    download = False
+
+    # If we don't have a scandata, download it.
+    # WHAT IS THIS??:  or os.patfrom PIL import Imageh.getsize(scandata_file) == 0
+    if not scandata_file.exists():
+        download = True
+
+    # Use the JSON metadata file to identify what to download
+    json_file = download_file(identifier, "metadata")
+    if json_file is None:
+        logger.error(f"{identifier}: Could not get JSON")
+        return None
+
+    with open(json_file, 'r') as file:
+        metadata = json.load(file)
+
+    ia_scandata_file = None
+    ia_scandata_mtime = None
+    for file in metadata['files']:
+        if file['format'] == 'Scandata' or file['format'] == 'Scribe Scandata ZIP':
+            ia_scandata_file = file['name']
+            # ia_scandata_mtime = file['mtime']
+
+    if ia_scandata_file is None:
+        # If there's no scandata, we have a problem
+        logger.error(f"{identifier}: No scandata found at IA")
+        return None
+
+    if download:
+        # Download from IA, but handle ZIP files at IA
+        url = f"https://archive.org/download/{identifier}/{ia_scandata_file}"
+        if ia_scandata_file.endswith('.zip'):
+            url = f"https://archive.org/download/{identifier}/{ia_scandata_file}/scandata.xml"
+        req = requests.get(url, stream=True)
+        with open(scandata_file, 'wb') as f:
+            for chunk in req.iter_content(chunk_size=128):
+                f.write(chunk)
+        logger.debug(f"{identifier}: Downloaded scandata")
+
+    return scandata_file
+
+def get_images(identifier):
+    # TODO Modify this to pay attention to mtime and download from IA if what they have is newer
+
+    images_file = get_cache_path(identifier, 'images') / f"{identifier}_jp2.zip"
+    download = False
+    download_reason = ''
+    ret = None
+
+    # If we don't have a images_file, download it.
+    if not images_file.exists() or os.path.getsize(images_file) == 0:
+        download = True
+        download_reason = "File did not exist or was empty."
+
+    # Use the JSON metadata file to identify what to download
+    json_file = download_file(identifier, "metadata")
+    if json_file is None:
+        logger.error(f"{identifier} Could not get JSON")
+        return None
+
+    # Figure out what file we want
+    with open(json_file, 'r') as file:
+        metadata = json.load(file)
+
+    images_file = None
+    images_mtime = None
+    for file in metadata['files']:
+        if (file['format'] == 'Single Page Processed JP2 Tar' or
+            file['format'] == 'Single Page Processed JP2 ZIP'):
+            images_filename = file['name']
+            images_mtime = file['mtime']
+
+    if images_filename is None:
+        for file in metadata['files']:
+            if (file['format'] == 'Single Page Processed TIFF ZIP' or
+                file['format'] == 'Single Page Processed TIFF TAR'):
+                images_filename = file['name']
+                images_mtime = file['mtime']
+
+    if download:
+        # Download the images file
+        if images_filename is not None:
+            images_file = get_cache_path(identifier, 'images') / images_filename
+            # Check again if we really need to download
+            if not images_file.exists() or os.path.getsize(images_file) == 0:
+                url = f"https://archive.org/download/{identifier}/{images_filename}"
+                req = requests.get(url, stream=True)
+                with open(images_file, 'wb') as f:
+                    for chunk in req.iter_content(chunk_size=128):
+                        f.write(chunk)
+                logger.debug(f"{identifier}: Downloaded scandata: {download_reason}")
+        else:
+            logger.error(f"{identifier}: No scandata found")
+            return None
+    else:
+        logger.debug(f"{identifier}: Not downloading, JP2 file exists")
+
+    if images_file is None:
+        logger.error(f"{identifier}: Couldn't find images")
+        return None
+
+    return images_file
+
+def download_file(identifier, type, use_cache=True):
+    if type == 'metadata':
+        metadata_file = get_cache_path(identifier, type) / identifier[0:1] / f"{identifier}.json"
+        if not metadata_file.exists():
+            url = f"https://archive.org/metadata/{identifier}"
+            req = requests.get(url, stream=True)
+            with open(metadata_file, 'wb') as f:
+                for chunk in req.iter_content(chunk_size=128):
+                    f.write(chunk)
+        return metadata_file
+
+    if type == 'images':
+        images_file = get_cache_path(identifier, type) / f"{identifier}_jp2.zip"
+        if not images_file.exists():
+            logger.debug(f"{identifier}: downloading images")
+            images_file = get_images(identifier)
+        return images_file
+
+    if type == 'scandata':
+        scandata_file = get_cache_path(identifier, type) / f"{identifier}_scandata.xml"
+        if not scandata_file.exists():
+            scandata_file = get_scandata(identifier)
+        return scandata_file
+
+def get_namespace(element):
+    m = re.match("{.*}", element.tag)
+    return m.group(0) if m else ''
+
+def parse_scandata(xml_file, identifier):
+    """
+    Parse scandata.xml and return list of pages that should be added to access formats.
+    Returns list of tuples: (original_filename, should_add)
+    """
+    # Parse the XML
+    root = ET.parse(xml_file)
+    pages = []
+
+    namespace = get_namespace(root.getroot())
+
+    # Find all page elements
+    for page in root.findall('.//{0}page'.format(namespace)):
+        leaf_num = int(page.attrib['leafNum'])
+        add_to_access = page.find('{0}addToAccessFormats'.format(namespace))
+
+        if leaf_num is not None and add_to_access is not None: # and orig_name is not None:
+            should_add = add_to_access.text.lower() == 'true'
+            original_name = f"{identifier}_{leaf_num:04d}.jp2"
+
+            pages.append({
+                'leaf_num': leaf_num,
+                'orig_name': original_name,
+                'add_to_access': should_add
+            })
+
+    return pages
+
+def rename_jp2_files(zip_filename, pages, dest_dir, identifier):
+    """
+    Read JP2 files from zip, rename sequentially based on addToAccessFormats flag.
+    """
+    # Filter pages that should be included
+    pages_to_include = [p for p in pages if p['add_to_access']]
+
+    # Create new zip file with renamed JP2s
+    with zipfile.ZipFile(zip_filename, 'r') as input_zip:
+        sequence_num = 1
+
+        for page in pages_to_include:
+            orig_name = page['orig_name']
+
+            # Try to find the file in the zip (might have .jp2 extension)
+            jp2_name = None
+            for name in input_zip.namelist():
+                if orig_name in name or orig_name.replace('.tif', '.jp2') in name:
+                    jp2_name = name
+                    break
+
+            if jp2_name:
+                # Read the file content
+                file_content = input_zip.read(jp2_name)
+
+                # Create new sequential name (4-digit padding)
+                new_name = f"{identifier}_{sequence_num:04d}.jp2"
+
+                # Write to destination with sequential name
+                with open(f"{dest_dir}/{new_name}", "wb") as f:
+                    f.write(file_content)
+
+                sequence_num += 1
+            else:
+                logger.error(f"{identifier}: Could not find JP2 file for {orig_name}")
+                # return None
+
+def create_webp_files(identifier, input_dir, output_dir):
+    """
+    Process all JP2 images in the directory input_dir saing to output_dir
+    """
+    input_dir = Path(input_dir)
+
+    if not input_dir.exists():
+        logger.error(f"{identifier}: Directory '{input_dir}' does not exist")
+        return
+
+    # Find all JP2 files
+    jp2_files = list(input_dir.glob('*.jp2')) + list(input_dir.glob('*.JP2'))
+    jp2_files.sort()
+
+    if not jp2_files:
+        logger.error(f"{identifier}: No JP2 files found in '{input_dir}'")
+        sys.exit()
+
+    # convert JP2 to full-size WEBP
+    for j in jp2_files:
+
+        jp2_path = Path(j)
+        jp2_base = jp2_path.stem
+
+        input_file = input_dir / f"{jp2_base}.jp2"
+        output_file = output_dir / f"{jp2_base}_full.webp"
+
+        logger.debug(f"{identifier}: WebP Source: {jp2_base}.jp2")
+
+        # Save full size webp
+        
+        try:
+            img = pyvips.Image.new_from_file(input_file, access='sequential')
+            img_w = img.width
+            img_h = img.height
+            img.write_to_file(output_file, Q=config['general']['webp_quality'])
+        except Exception as e:
+            logger.warning(f"{identifier}: VIPS error for {jp2_base}.jp2: {e}")
+            logger.warning(f"{identifier}: Falling back to ImageMagic/Wand")
+            # Something went wrong, fall back to ImagageMagick Wand module
+            img = Image(filename=input_file)
+            img_w, img_h = img.size
+            img.compression_quality = config['general']['webp_quality']
+            img_webp = img.convert('webp')
+            img_webp.save(filename=output_file)
+            # Since we use 'input_file' below for the thumbnails, point us to
+            # the webp file we just created
+            input_file = output_file
+
+        # resize to webp
+        for size_name in config['webp_sizes']:
+            target_width = config['webp_sizes'][size_name]
+            logger.debug(f"{identifier}: WebP Source: {jp2_base}.jp2 -> {size_name}")
+            # calculate the resize factors using the current width and the desired width
+            factor = target_width / img_w
+            th_h = int(factor * img_h)
+
+            thumb_file = output_dir / f"{jp2_base}_{size_name}.webp"
+            thumb = pyvips.Image.thumbnail(input_file, th_h)
+            thumb.write_to_file(thumb_file)
+
+    return(str(output_dir))
+
+def sync_images_to_aws_s3(source_path, pattern, bucket, prefix, identifier):
+    s3_client = boto3.client('s3')
+    upload_files = list(source_path.glob(pattern))
+
+    for file in upload_files:
+        fsplit = os.path.split(file)
+        filename = fsplit[1]
+        s3_object_name = f"{prefix}/{identifier}/{filename}"
+
+        try:
+            logger.debug(f"{identifier}: Syncing to S3: {file} --> s3://{bucket}/{s3_object_name}")
+            response = s3_client.upload_file(file, bucket, s3_object_name)
+        except NoCredentialsError:
+            logger.error(f"{identifier}: Credentials not available")
+        except Exception as e:
+            logger.error(f"{identifier}: An error occurred: {e}")
+
+def sync_file_to_aws_s3(source_file, bucket, prefix, identifier):
+    s3_client = boto3.client('s3')
+    s3_object_name = prefix + '/' + os.path.basename(source_file)
+
+    try:
+        logger.debug(f"{identifier}: Syncing to S3: {source_file} --> s3://{bucket}/{s3_object_name}")
+        response = s3_client.upload_file(source_file, bucket, s3_object_name)
+    except NoCredentialsError:
+        logger.error(f"{identifier}: Credentials not available")
+    except Exception as e:
+        logger.error(f"{identifier}: An error occurred: {e}")
+
+def normalize_images(identifier, images_file):
+    # if we got anything but JP2, we convert to JP2
+    # What kind of file do we have? ZIP or TAR
+    if str(images_file).lower().endswith(f"{identifier}_jp2.zip"):
+        return images_file
+
+    tmp_path = mkdtemp(dir=config['general']['scratch_path'])
+    if str(images_file).lower().endswith(('.zip', '.ZIP')):
+        # unzip the file
+        with zipfile.ZipFile(images_file, 'r') as zip_ref:
+            zip_ref.extractall(tmp_path)
+
+    if str(images_file).lower().endswith(('.tar', '.TAR')):
+        # untar the file
+        with tarfile.TarFile(images_file, 'r') as tar_ref:
+            tar_ref.extractall(tmp_path)
+
+    # check the extracted files to see what they are
+    tmp_path = Path(tmp_path)
+    image_files = list(tmp_path.glob('*.jp2')) + list(tmp_path.glob('*.JP2'))
+    if not image_files:
+        image_files = list(tmp_path.glob('*/*.jp2')) + list(tmp_path.glob('*/*.JP2'))
+
+    if not image_files:
+        image_files = list(tmp_path.glob('*.tif')) + list(tmp_path.glob('*.TIF'))
+
+    if not image_files:
+        image_files = list(tmp_path.glob('*/*.tif')) + list(tmp_path.glob('*/*.TIF'))
+
+    if not image_files:
+        image_files = list(tmp_path.glob('*.jpg')) + list(tmp_path.glob('*.JPG'))
+
+    if not image_files:
+        image_files = list(tmp_path.glob('*/*.jpg')) + list(tmp_path.glob('*/*.JPG'))
+
+    jp2_tmp_path = mkdtemp(dir=config['general']['scratch_path'])
+    jp2_tmp_path = Path(jp2_tmp_path) / f"{identifier}_jp2"
+    jp2_tmp_path.mkdir(parents=True, exist_ok=True)
+    for input_file in image_files:
+        match = re.search("_([0-9]{4})$", input_file.stem)
+        seq = match.group(1)
+
+        output_file = jp2_tmp_path / f"{identifier}_{seq}.jp2"
+        if str(input_file).endswith('.jp2') or str(input_file).endswith('.JP2'):
+            shutil.copy(input_file, output_file)
+        else:
+            img = pyvips.Image.new_from_file(input_file, access='sequential')
+            img.jp2ksave(output_file)
+
+    # zip to jp2.zip
+    zip_filename = get_cache_path(identifier, 'images') / f"{identifier}_jp2.zip"
+    with zipfile.ZipFile(zip_filename, 'w') as zip_ref:
+        for file in jp2_tmp_path.glob('*'):
+            zip_ref.write(file, file.relative_to(jp2_tmp_path.parent))
+
+    # Cleanup
+    shutil.rmtree(tmp_path)
+    shutil.rmtree(jp2_tmp_path)
+
+    return zip_filename
+
+def _get_bhl_item(Identifier=None, ID=None, OCR=False):
+    """
+    Get the BHL metadata for an item. Uses either ID number or IA identifier.
+    Returns the type of the object ("item" or "virtual item"), ID Number and the Object
+    """
+    ocr = 't'
+    if not OCR:\
+        ocr = 'f'
+
+    url = None
+    api_key = config['general']['bhl_api_key']
+    if Identifier is not None:
+        url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={Identifier}&idtype=ia&pages=t&ocr={ocr}&format=json&apikey={api_key}"
+    elif ID is not None:
+        url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={ID}&idtype=bhl&pages=t&ocr={ocr}&format=json&apikey={api_key}"
+    else:
+        return (None, None, None)
+
+    req = urllib.request.Request(url, headers={'User-Agent': config['general']['user_agent']})
+    response = urllib.request.urlopen(req)
+    if response.status == 200:
+        data = json.load(response)
+        if len(data['Result']) == 1:
+            itm = data['Result'][0]
+            if itm['Source'] == "Virtual Item":
+                return ('virtual_item', itm['ItemID'], itm)
+            else:
+                return ('item', itm['ItemID'], itm)
+    else:
+        headers = response.headers
+        ray = headers['CF-RAY']
+        logger.error(f"{identifier}: Got HTTP {response.status} CF-RAY = {ray}")
+        
+    return (None, None, None)
+
+def _get_bhl_part(Identifier=None, ID=None, OCR=False):
+    ocr = 't'
+    if not OCR:
+        ocr = 'f'
+
+    url = None
+    api_key = config['general']['bhl_api_key']
+    if Identifier is not None:
+        url = f"https://www.biodiversitylibrary.org/api3?op=GetPartMetadata&id={Identifier}&idtype=ia&pages=t&ocr={ocr}&format=json&apikey={api_key}"
+    elif ID is not None:
+        url = f"https://www.biodiversitylibrary.org/api3?op=GetPartMetadata&id={ID}&idtype=bhl&pages=t&ocr={ocr}&format=json&apikey={api_key}"
+    else:
+        return (None, None, None)
+
+    req = urllib.request.Request(url, headers={'User-Agent': config['general']['user_agent']})
+    response = urllib.request.urlopen(req)
+    if response.status == 200:
+        data = json.load(response)
+        if len(data['Result']) == 1:
+            itm = data['Result'][0]
+            return ('part', itm['PartID'], itm)
+    else:
+        headers = response.headers
+        ray = headers['CF-RAY']
+        logger.error(f"{identifier}: Got HTTP {response.status} CF-RAY = {ray}")
+
+def get_ocr(identifier):
+    """
+    Get the OCR for an item or part and save it to our local cache
+    """
+    # Determine if we have an item or a part
+    bhl_type = None
+    bhl_item = None
+    bhl_id = None
+
+    (bhl_type, bhl_id, bhl_item) = _get_bhl_item(Identifier=identifier, OCR=True)
+    if bhl_type is None:
+        (bhl_type, bhl_id, bhl_item) = _get_bhl_part(Identifier=identifier, OCR=True)
+
+    id_zfill = str(bhl_id).zfill(6)
+    ocr_path = get_cache_path(identifier, 'ocr') / f"{bhl_type}-{id_zfill}"
+    ocr_path.mkdir(parents=True, exist_ok=True)
+    for i in range(len(bhl_item['Pages'])):
+        page_id = str(bhl_item['Pages'][i]['PageID']).zfill(8)
+        seq = str(i + 1).zfill(4)
+        ocr_filename = ocr_path / f"{bhl_type}-{id_zfill}-{page_id}-{seq}.txt"
+        ocr_text = ""
+        # Handle the lack of OcrText in the object, use the OcrUrl instead
+        if "OcrText" in bhl_item['Pages'][i]:
+            ocr_text = bhl_item['Pages'][i]['OcrText']
+        else:
+            url = bhl_item['Pages'][i]['OcrUrl']
+            logger.info(f"{identifier}: OCR URL {url}")
+            req = urllib.request.Request(url, headers={'User-Agent': config['general']['user_agent']})
+            response = urllib.request.urlopen(req)
+            if response.status == 200:
+                ocr_text = response.read().decode()
+                logger.info(f"{identifier}: Sleeping...")
+                time.sleep(1)
+                logger.info(f"{identifier}: Awake!")
+            else:
+                headers = response.headers
+                ray = headers['CF-RAY']
+                logger.error(f"{identifier}: For OCR Got HTTP {response.status} CF-RAY = {ray}")
+
+
+        # Handle different line endings. Normalize to CRLF (for now)
+        # Since we already hit the BHL API for all the OCR, we will always overwrite every time
+        if "\r\n" in ocr_text:
+            # Windows line endings, leave them
+            with open(ocr_filename, 'w') as file:
+                file.write(ocr_text)
+        elif "\n" in ocr_text:
+            # Linux line endings, convert to \r\n
+            with open(ocr_filename, 'w') as file:
+                file.write(ocr_text.replace("\n", "\r\n"))
+
+    return ocr_path
+
+def combine_ocr(identifier, ocr_dir):
+    path_parts = str(ocr_dir).split('/')
+    base = path_parts[len(path_parts)-1]
+    fulltext_filename = ocr_dir / f"{base}.txt"
+    ocr_files = list(ocr_dir.glob('*-*-*-*.txt'))
+    ocr_files.sort()
+    with open(fulltext_filename, "w") as fulltext:
+        for file in ocr_files:
+            with open(file, "r") as ocr:
+                for line in ocr:
+                    fulltext.write(line)
+                fulltext.write("\r\n")
+
+    return (fulltext_filename, base)
+
+def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, Fulltext=True, StdOut=False, Verbose=False, DryRun=False):
+    if Identifier is None or Identifier == '':
+        return None
+
+    (item_type, id, itm_obj) = _get_bhl_item(Identifier=Identifier, OCR=False)
+
+    # If this is an item and it's a virtual item, we can't process it, so we check.
+    if item_type == 'virtual_item':
+        print(f"{Identifier} is a virtual item. Cannot continue.")
+        sys.exit()
+
+    # if no other args were supplied, do them all
+    if not Images and not Scandata and not OCR and not Fulltext:
+        Images = True
+        Scandata = True
+        OCR = True
+        Fulltext = True
+
+    # Always send scandata with the images
+    if Images:
+        Scandata = True
+
+    # Aleays send Fulltext OCR with the OCR
+    if OCR:
+        Fulltext = True
+
+    # Update the logger
+
+    fileh = logging.FileHandler(f"logs/{Identifier}.log", 'a')
+    if StdOut:
+        fileh = logging.StreamHandler(sys.stdout)
+    if Verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    formatter = logging.Formatter('%(asctime)s: %(name)s: (%(levelname)s) %(message)s')
+    fileh.setFormatter(formatter)
+
+    logger = logging.getLogger()     # root logger
+    for h in logger.handlers[:]:     # remove all old handlers
+        logger.removeHandler(h)
+    logger.addHandler(fileh)         # set the new handler
+
+    if DryRun:
+        logger.info(f"{Identifier}: Dry Run selected. Not uploading to AWS.")
+    
+    try:
+        jp2_dir = None
+        if Images:
+            # Download scandata.xml
+            # ---------------------
+            logger.info(f"{Identifier}: Checking Scandata")
+            scandata_file = download_file(Identifier, "scandata")
+            if scandata_file is None:
+                logger.error(f"{Identifier}: Scandata not found.")
+                sys.exit()
+
+            # Download and normalize images
+            # -----------------------------
+            logger.info(f"{Identifier}: Images Download")
+            images_file = download_file(Identifier, "images")
+
+            # guarantee we have a ZIP of JP2s
+            logger.info(f"{Identifier}: Images Normalize")
+            jp2_file = normalize_images(Identifier, images_file)
+
+            if jp2_file is None:
+                logger.error(f"{Identifier}: Images not found")
+                sys.exit()
+
+            # Parse scandata.xml
+            # ------------------
+            logger.info(f"{Identifier}: Parse Scandata")
+            pages = parse_scandata(scandata_file, Identifier)
+            page_count = len(pages)
+
+            # Rename JP2 files using scandata.xml
+            # -----------------------------------
+            logger.info(f"{Identifier}: Images Rename (count: {page_count})")
+            jp2_dir = Path(config['general']['scratch_path']) / f"{Identifier}"
+            jp2_dir.mkdir(parents=True, exist_ok=True)
+            rename_jp2_files(jp2_file, pages, jp2_dir, Identifier)
+
+            # Convert to webp
+            # ---------------
+            logger.info(f"{Identifier}: Create WebP")
+            webp_dir = jp2_dir / "webp"
+            webp_dir.mkdir(parents=True, exist_ok=True)
+            create_webp_files(Identifier, jp2_dir, webp_dir)
+
+            # Send the webp files to Amazon
+            # -----------------------------
+            if DryRun:
+                logger.info(f"{Identifier}: (dry run) Not uploading images to AWS")
+            else:
+                logger.info(f"{Identifier}: Upload to AWS")
+                sync_images_to_aws_s3(jp2_dir, '*.jp2', 'bhl-open-data', 'images', Identifier)
+                sync_images_to_aws_s3(webp_dir, '*.webp', 'bhl-open-data', 'web', Identifier)
+                sync_file_to_aws_s3(scandata_file, 'bhl-open-data', 'scandata', Identifier)
+
+        if Scandata and not Images:
+            scandata_file = get_ia_file(Identifier, type="scandata")
+            if scandata_file is None or jp2_file is None:
+                logger.error(f"Scandata for {Identifier} not found on Qumulo")
+            else:
+                if DryRun:
+                    logger.info(f"{Identifier}: (dry run) Not uploading scandata to AWS")
+                else:
+                    sync_file_to_aws_s3(scandata_file, 'bhl-open-data', 'scandata', Identifier)
+
+        ocr_dir = None
+        if OCR:
+            logger.info(f"{Identifier}: OCR ")
+            ocr_dir = get_ocr(Identifier)
+            if DryRun:
+                logger.info(f"{Identifier}: (dry run) Not uploading ocr to AWS")
+            else:
+                sync_images_to_aws_s3(ocr_dir, '*.txt', 'bhl-open-data', 'ocr', Identifier)
+
+        if Fulltext:
+            if ocr_dir is None:
+                ocr_dir = get_ocr(Identifier)
+            (fulltext_file, key) = combine_ocr(Identifier, ocr_dir)
+            if DryRun:
+                logger.info(f"{Identifier}: (dry run) Not uploading full text to AWS")
+            else:
+                sync_file_to_aws_s3(fulltext_file, 'bhl-open-data', f"ocr/{key}", Identifier)
+
+        # Cleanup
+        # -------
+        logger.info(f"{Identifier}: Cleanup.")
+        try:
+            if jp2_dir is not None:
+                shutil.rmtree(jp2_dir)
+        except OSError as e:
+            if e.strerror == "Directory not empty":
+                # Not sure why this happens, but trying again seems to fix it usually?
+                shutil.rmtree(jp2_dir)
+            else:
+                logger.error(f"{Identifier}: {e.strerror}")
+
+    except requests.RequestException as e:
+        logger.info(f"Error downloading files: {Identifier}: {e}")
+    except ET.ParseError as e:
+        logger.info(f"Error parsing XML: {Identifier}: {e}")
+    except Exception as e:
+        logger.info(f"Error: {Identifier}: {e}")
+
+def clean_item(identifier):
+    logger.info(f"{identifier}: Cleaning Metadata and Images")
+    metadata_file = get_cache_path(identifier, 'metadata') / identifier[0:1] / f"{identifier}.json"
+    if metadata_file.exists():
+        os.remove(str(metadata_file))
+
+    images_file = get_cache_path(identifier, 'images') / f"{identifier}_jp2.zip"
+    if images_file.exists():
+        os.remove(str(images_file))
+
+    # scandata_file = get_cache_path(identifier, 'scandata') / f"{identifier}_scandata.xml"
+    # if scandata_file.exists():
+    #     os.remove(str(scandata_file))
+
+def main():
+    # Parse the command line
+    # ----------------------
+    parser = argparse.ArgumentParser(
+        description='Update a BHL item at AWS. Optionally only update parts of the item.'
+    )
+    parser.add_argument(
+        '--identifier',
+        default=None,
+        required=False,
+        help='Archive.org identifier for the item.'
+    )
+    parser.add_argument(
+        '--pop',
+        action='store',
+        default=None,
+        help='Read the identifer from the first line in the file specified.'
+    )
+    parser.add_argument(
+        '-i', '--images-only',
+        action='store_true',
+        help='Download JP2 images from IA, convert to WebP, send to AWS. Implies --scandata-only'
+    )
+    parser.add_argument(
+        '-s', '--scandata-only',
+        action='store_true',
+        help='Download scandata.xml fom IA, send to AWS'
+    )
+    parser.add_argument(
+        '-o', '--ocr-only',
+        action='store_true',
+        help='Download OCR from IA, or BHL if transcribed content, send to AWS. Implies --fulltext-only'
+    )
+    parser.add_argument(
+        '-f', '--fulltext-only',
+        action='store_true',
+        help='Combine the OCR into one file, upload to AWS.'
+    )
+    parser.add_argument(
+        '--clean',
+        action='store_true',
+        help='Do not use existing files. Download all from Internet Archive.'
+    )
+    parser.add_argument(
+        '--stdout',
+        action='store_true',
+        help='Output to STDOUT as well as the log file'
+    )
+    parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Output more info. (logging=DEBUG)'
+    )
+    parser.add_argument(
+        '--dryrun',
+        action='store_true',
+        help='Do everything except upload to AWS'
+    )
+    args = parser.parse_args()
+
+    Identifier = None
+    # If we got an identifier from the command line, use that.
+    if args.identifier:
+        Identifier = args.identifier
+    
+    # If we are told to use a file as queue, pop the first
+    # row from the file and use that.
+    if Identifier is None and args.pop is not None: 
+        Identifier = popHead(1, args.pop)[0]
+
+    if Identifier is None: 
+        print("No identifier found or provided.")
+        sys.exit(64)
+
+    # If we got a number less than 60,000 we assume it's an ID number
+    # and we look for that row in the list of files
+    p = re.compile('[0-9]+$')
+    if p.match(Identifier):
+        if int(Identifier) < 600000:
+            Identifier = get_identifier_by_index(Identifier)
+            print(f"Identifier was numeric, using f{Identifier}")
+
+    if args.clean:
+        clean_item(Identifier)
+    
+    update_item(
+        Identifier = Identifier,
+        Images = args.images_only,
+        Scandata = args.scandata_only,
+        OCR = args.ocr_only,
+        Fulltext = args.fulltext_only,
+        StdOut = args.stdout,
+        Verbose = args.verbose,
+        DryRun = args.dryrun
+    )
+
+if __name__ == "__main__":
+    main()
