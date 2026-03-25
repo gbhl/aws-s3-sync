@@ -10,7 +10,7 @@ The script takes into account inconsistencies at the Internet Archive as much as
 
 ## Installation
 
-This uses a virtual environment and requires Python 3.13 and libvips for image manipulation.
+This uses a virtual environment and requires Python 3.12 or greater and libvips for image manipulation.
 
 ```
 python -m venv venv
