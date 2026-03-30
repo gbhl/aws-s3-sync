@@ -626,12 +626,11 @@ def get_ocr(identifier):
             temp_file = _download_url(url)
             if temp_file is not None:
                 os.rename(temp_file, ocr_filename)
+                # Read the file we just saved
+                with open(ocr_filename, 'r') as file:
+                    ocr_text = file.read()
             else:
                 return None
-
-        # Read the file we just saved
-        with open(ocr_filename, 'r') as file:
-            ocr_text = file.read()
 
         # Normalize line endings to CRLF
         if "\n\r" in ocr_text:
