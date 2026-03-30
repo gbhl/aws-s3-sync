@@ -1,6 +1,6 @@
 # BHL Update AWS Item
 
-Updates an item from BHL at AWS S3.
+Updates an item from the Biodiversity Heritage Library (BHL) at AWS S3.
 
 BHL maintains a copy of its data at Amazon S3 as part of it's membership in the AWS Open Data Sponsorship Program. This script is meant to update an item's data at AWS to keep it in sync with BHL's metadata.
 
@@ -31,6 +31,16 @@ The script will check for any cached files and update these types of files at AW
 * Combined OCR (All OCR files combined into one text file)
 * IA Scandata (page-level metadata)
 
+## Advanced Usage
+
+The Linux `parallel` command may be used together with a list of identifers to process multiple items at the same time. 
+
+Using a file named `LIST.TXT`, this will run eight copies of the script until all items are processed. The `./logs/` 
+folder should be monitored for progress and output. Limited messages are sent to Standard Output.
+
+`cat LIST.TXT | parallel -j 8 python update-aws-item.py --identifier`
+
+
 ## Options
 `--identifier IDENTIFIER`  
 Archive.org identifier for the item.
@@ -42,10 +52,7 @@ FILENAME is a list of identifiers. Reads and removes the first line of the file 
 Download JP2 images from IA, convert to WebP, send to AWS. This will prefer the locally cached IDENTIFIER_jp2.zip. Implies `--scandata-only`
 
 `-o`, `--ocr-only`  
-Downloads OCR file for each page from BHL ansend to AWS. Implies `--fulltext-only`
-
-`-f`, `--fulltext-only`  
-Combines all OCR for the item one text file and uploads to AWS.
+Downloads OCR file for each page from BHL ansend to AWS. Also uploads ne file of all combined OCR.
 
 `--clean`  
 Removes files from the local cache. Does not remove `scandata.xml`. Downloads all other files from the Internet Archive as needed.
@@ -99,13 +106,7 @@ The script performs the following steps. Some steps will be skipped or performed
 
     2. Upload the OCR files to AWS.
 
-8. If the combined scandata is to be uploaded (`-f` or `--fulltext-only` option):
-
-    1. If the OCR is not downloaded and processed fromA IA. Do so as described in Step 6 above. 
-    
-    2. Concatenate the OCR files into one .txt file and upload to AWS.
-
-9. Cleans up any temporary files (extracted JP2 and WEBP) that were created during processing. IA Item metadata, Scandata, JP2s and OCR files will remain in the local cache.
+8. Cleans up any temporary files (extracted JP2 and WEBP) that were created during processing. IA Item metadata, Scandata, JP2s and OCR files will remain in the local cache.
 
 ## Error handling
 
@@ -115,12 +116,13 @@ Most errors are fatal and will halt processing. Temporary files created will not
 
 The script needs certain values.
 
-* WEBP Quality (deftault=50)
+* WEBP Quality  (default=50)
 * Cache Path (default=./cache)
     * Cache path will contain several subfoldes for JP2, JSON metadata, OCR, and Scandata.
 * Temporary Working Space (default=./tmp)
 * BHL API Key (no default)
-* User-Agent to attempt to avoid Cloudflare blocking (default=A recent version of Firefox)
+* WebP Name and Sizes which should not be changed
+* Log path and filename
 
 ## Notes
 
