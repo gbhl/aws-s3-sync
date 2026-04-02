@@ -33,10 +33,14 @@ The script will check for any cached files and update these types of files at AW
 
 ## Advanced Usage
 
-The Linux `parallel` command may be used together with a list of identifers to process multiple items at the same time. 
+To process a list of items, this command may be useful:
 
-Using a file named `LIST.TXT`, this will run eight copies of the script until all items are processed. The `./logs/` 
-folder should be monitored for progress and output. Limited messages are sent to Standard Output.
+`while read -r $ID; do python update-aws-item.py --identifier $ID; done < LIST.TXT` 
+
+The Linux `parallel` command may be used together with the same list of identifers to process multiple items at the same time. 
+
+This will run eight (8) copies of the script until all items are processed. The `./logs/` 
+folder should be monitored for progress and output.
 
 `cat LIST.TXT | parallel -j 8 python update-aws-item.py --identifier`
 
