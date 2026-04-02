@@ -8,7 +8,6 @@ Then converts each JP2 to a variety of smaller sized WebP files.
 
 If uploading scandata,
 """
-
 import sys
 import os
 import logging
@@ -30,6 +29,7 @@ from pathlib import Path
 from botocore.exceptions import NoCredentialsError
 from random import randint
 from wand.image import Image
+import bhl_aws_common
 
 # Read the config.toml file
 config_file = Path('config.toml')
@@ -152,7 +152,7 @@ def get_scandata(identifier):
         # Download it from AWS.
         url = f"https://bhl-open-data.s3.us-east-2.amazonaws.com/scandata/{identifier}_scandata.xml"
         
-        temp_file = _download_url(url)
+        temp_file = bhl_aws_common.download_url(config, url)
         if temp_file is not None:
             os.rename(temp_file, scandata_file)
             logger.debug('Downloaded scandata from AWS')
@@ -160,7 +160,7 @@ def get_scandata(identifier):
             url = f"https://archive.org/download/{identifier}/{ia_scandata_file}"
             if ia_scandata_file.endswith('.zip'):
                 url = f"https://archive.org/download/{identifier}/{ia_scandata_file}/scandata.xml"
-            temp_file = _download_url(url)
+            temp_file = bhl_aws_common.download_url(config, url)
             if temp_file is not None:
                 os.rename(temp_file, scandata_file)
                 logger.debug('Downloaded scandata from IA')
@@ -191,6 +191,7 @@ def get_images(identifier):
         metadata = json.load(file)
 
     images_file = None
+    images_filename = None
     images_mtime = None
     for file in metadata['files']:
         if (file['format'] == 'Single Page Processed JP2 Tar' or
@@ -215,7 +216,7 @@ def get_images(identifier):
         # Check again if we really need to download
         if not images_file.exists() or os.path.getsize(images_file) == 0:
             url = f"https://archive.org/download/{identifier}/{images_filename}"
-            temp_file = _download_url(url)
+            temp_file = bhl_aws_common.download_url(config, url)
             if temp_file is None:
                 logger.error('No image file found at IA')
                 return None
@@ -232,45 +233,6 @@ def get_images(identifier):
 
     return images_file
 
-def _download_url(url):
-    """
-    Reliably download a URL, handling 4xx and 5xx status codes 
-    with a cooldown and retry
-    """
-    # TODO Update this to return a data stream
-    # TODO Update to take the destination filename instead of returning a temp file
-
-    max_retries = 5
-    retry_delay = 1
-
-    temp_name = next(tempfile._get_candidate_names())
-    temp_filepath = Path(config['general']['scratch_path']) / temp_name
-
-    for attempt in range(max_retries):
-        try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                with open(temp_filepath, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=128):
-                        f.write(chunk)
-                return temp_filepath
-            elif response.status_code == 429:
-                if attempt < max_retries - 1:
-                    delay = retry_delay * (attempt + 1)
-                    logger.warning(f"Got HTTP {response.status_code}. Retrying in {delay} seconds...")
-                    time.sleep(delay)
-                else:
-                    logger.error(f"Max Retries Reached for {url}")
-                    return None
-            else:
-                response.raise_for_status()
-        except requests.RequestException as e:
-            logger.error(e)
-            return None
-        except Exception as e:
-            logger.info(e)
-            return None
-
 def download_file(identifier, type, use_cache=True):
     # TODO This function needs to be renamed. There's no downloading happening!
     if type == 'metadata':
@@ -278,7 +240,7 @@ def download_file(identifier, type, use_cache=True):
         metadata_path.mkdir(parents=True, exist_ok=True)
         metadata_file = metadata_path / f"{identifier}.json"
         if not metadata_file.exists():
-            temp_file = _download_url(f"https://archive.org/metadata/{identifier}")
+            temp_file = bhl_aws_common.download_url(config, f"https://archive.org/metadata/{identifier}")
             if temp_file is not None:
                 os.rename(temp_file, metadata_file)
             else:
@@ -426,8 +388,9 @@ def create_webp_files(identifier, input_dir, output_dir):
             th_h = int(factor * img_h)
 
             thumb_file = output_dir / f"{jp2_base}_{size_name}.webp"
-            thumb = pyvips.Image.thumbnail(input_file, th_h)
-            thumb.write_to_file(thumb_file)
+            if not thumb_file.exists():
+                thumb = pyvips.Image.thumbnail(input_file, th_h)
+                thumb.write_to_file(thumb_file)
 
     return(str(output_dir))
 
@@ -521,73 +484,6 @@ def normalize_images(identifier, images_file):
 
     return zip_filename
 
-def _get_bhl_item(Identifier=None, ID=None, OCR=False):
-    """
-    Get the BHL metadata for an item. Uses either ID number or IA identifier.
-    Returns the type of the object ("item" or "virtual item"), ID Number and the Object
-    """
-    ocr = 't'
-    if not OCR:
-        ocr = 'f'
-
-    url = None
-    api_key = config['general']['bhl_api_key']
-    if Identifier is not None:
-        url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={Identifier}&idtype=ia&pages=t&ocr={ocr}&format=json&apikey={api_key}"
-    elif ID is not None:
-        url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={ID}&idtype=bhl&pages=t&ocr={ocr}&format=json&apikey={api_key}"
-    else:
-        return (None, None, None)
-
-    temp_file = _download_url(url)
-
-    # Let's hope we always get some data
-    if temp_file is None:
-        return (None, None, None)
-
-    # read and process the JSON data
-    with open(temp_file, 'r') as file:
-        data = json.load(file)
-
-    os.remove(temp_file) # Don't need the file anymore
-    if len(data['Result']) == 1:
-        itm = data['Result'][0]
-        if itm['Source'] == "Virtual Item":
-            return ('virtual_item', itm['ItemID'], itm)
-        else:
-            return ('item', itm['ItemID'], itm)
-
-    return (None, None, None)
-
-def _get_bhl_part(Identifier=None, ID=None, OCR=False):
-    ocr = 't'
-    if not OCR:
-        ocr = 'f'
-
-    url = None
-    api_key = config['general']['bhl_api_key']
-    if Identifier is not None:
-        url = f"https://www.biodiversitylibrary.org/api3?op=GetPartMetadata&id={Identifier}&idtype=ia&pages=t&ocr={ocr}&format=json&apikey={api_key}"
-    elif ID is not None:
-        url = f"https://www.biodiversitylibrary.org/api3?op=GetPartMetadata&id={ID}&idtype=bhl&pages=t&ocr={ocr}&format=json&apikey={api_key}"
-    else:
-        return (None, None, None)
-
-    temp_file = _download_url(url)
-
-    if temp_file is None:
-        return (None, None, None)
-
-    # read and process the JSON data
-    with open(temp_file, 'r') as file:
-        data = json.load(file)
-
-    os.remove(temp_file) # Don't need the file anymore
-    if len(data['Result']) == 1:
-        itm = data['Result'][0]
-        return ('part', itm['PartID'], itm)
-
-    return (None, None, None)
 
 def get_ocr(identifier):
     """
@@ -598,9 +494,9 @@ def get_ocr(identifier):
     bhl_item = None
     bhl_id = None
 
-    (bhl_type, bhl_id, bhl_item) = _get_bhl_item(Identifier=identifier, OCR=True)
+    (bhl_type, bhl_id, bhl_item) = bhl_aws_common.get_bhl_item(config, Identifier=identifier, OCR=True)
     if bhl_type is None:
-        (bhl_type, bhl_id, bhl_item) = _get_bhl_part(Identifier=identifier, OCR=True)
+        (bhl_type, bhl_id, bhl_item) = bhl_aws_common.get_bhl_part(config, Identifier=identifier, OCR=True)
 
     id_zfill = str(bhl_id).zfill(6)
     ocr_path = get_cache_path(identifier, 'ocr') / f"{bhl_type}-{id_zfill}"
@@ -620,10 +516,10 @@ def get_ocr(identifier):
             url = bhl_item['Pages'][i]['OcrUrl']
             logger.info(f"OCR URL {url}")
 
-            # TODO Update _download_url() to return a data stream
+            # TODO Update download_url() to return a data stream
             # instead of a filename to save us from reopening a file
             # that we just saved
-            temp_file = _download_url(url)
+            temp_file = bhl_aws_common.download_url(config, url)
             if temp_file is not None:
                 os.rename(temp_file, ocr_filename)
                 # Read the file we just saved
@@ -681,11 +577,21 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
         sys.exit(1)
 
     # If this is an item and it's a virtual item, we can't process it, so we check.
-    (item_type, id, itm_obj) = _get_bhl_item(Identifier=Identifier, OCR=False)
+    (item_type, id, bhl_object) = bhl_aws_common.get_bhl_item(config, Identifier=Identifier, OCR=False)
     if item_type == 'virtual_item':
         print(f"{Identifier} is a virtual item. Stopping.")
         logging.error(f"{Identifier} is a virtual item. Stopping.")
         sys.exit(1)
+
+   # If we didn't get an item, let's see if it's a part
+    if bhl_object is None:
+        (bhl_type, bhl_id, bhl_object) = bhl_aws_common.get_bhl_part(config, Identifier=Identifier, OCR=True)
+
+    if bhl_object is None:
+        print(f"{Identifier} is not in BHL. Stopping.")
+        logging.error('Identifier is not in BHL. Stopping.')
+        sys.exit(1)
+
 
     # if no other args were supplied, do them all
     if not Images and not Scandata and not OCR:
