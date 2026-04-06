@@ -29,7 +29,8 @@ from pathlib import Path
 from botocore.exceptions import NoCredentialsError
 from random import randint
 from wand.image import Image
-import bhl_aws_common
+from bhl_aws_common import download_url
+from bhl_object import BHL_Object
 
 # Read the config.toml file
 config_file = Path('config.toml')
@@ -62,15 +63,13 @@ logging.getLogger('boto3').setLevel(logging.CRITICAL)
 logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
 logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 
-# Random sleep to not overwhelm the API
-# --------------
-sleep_time = randint(1,5)
-logger.info(f"Starting up and sleeping for {sleep_time}")
-time.sleep(sleep_time)
-
 # Reduce memory footprint - we don't need a lot of caching
 # --------------
 pyvips.cache_set_max(0)
+
+# We need a place to save things while we work
+# -------------- 
+bhl_object = None
 
 def get_identifier_by_index(idx):
     idx = int(idx)
@@ -152,7 +151,7 @@ def get_scandata(identifier):
         # Download it from AWS.
         url = f"https://bhl-open-data.s3.us-east-2.amazonaws.com/scandata/{identifier}_scandata.xml"
         
-        temp_file = bhl_aws_common.download_url(config, url)
+        temp_file = download_url(url, config['general']['scratch_path'], logger)
         if temp_file is not None:
             os.rename(temp_file, scandata_file)
             logger.debug('Downloaded scandata from AWS')
@@ -160,7 +159,7 @@ def get_scandata(identifier):
             url = f"https://archive.org/download/{identifier}/{ia_scandata_file}"
             if ia_scandata_file.endswith('.zip'):
                 url = f"https://archive.org/download/{identifier}/{ia_scandata_file}/scandata.xml"
-            temp_file = bhl_aws_common.download_url(config, url)
+            temp_file = download_url(url, config['general']['scratch_path'], logger)
             if temp_file is not None:
                 os.rename(temp_file, scandata_file)
                 logger.debug('Downloaded scandata from IA')
@@ -216,7 +215,7 @@ def get_images(identifier):
         # Check again if we really need to download
         if not images_file.exists() or os.path.getsize(images_file) == 0:
             url = f"https://archive.org/download/{identifier}/{images_filename}"
-            temp_file = bhl_aws_common.download_url(config, url)
+            temp_file = download_url(url, config['general']['scratch_path'], logger)
             if temp_file is None:
                 logger.error('No image file found at IA')
                 return None
@@ -240,7 +239,7 @@ def download_file(identifier, type, use_cache=True):
         metadata_path.mkdir(parents=True, exist_ok=True)
         metadata_file = metadata_path / f"{identifier}.json"
         if not metadata_file.exists():
-            temp_file = bhl_aws_common.download_url(config, f"https://archive.org/metadata/{identifier}")
+            temp_file = download_url(f"https://archive.org/metadata/{identifier}", config['general']['scratch_path'], logger)
             if temp_file is not None:
                 os.rename(temp_file, metadata_file)
             else:
@@ -405,6 +404,7 @@ def sync_dir_to_aws_s3(source_path, pattern, bucket, prefix):
 
         try:
             logger.debug(f"Syncing to S3: {file} --> s3://{bucket}/{s3_object_name}")
+            # TODO Set proper mime type
             response = s3_client.upload_file(file, bucket, s3_object_name)
         except NoCredentialsError:
             logger.error('Credentials not available')
@@ -417,6 +417,7 @@ def sync_file_to_aws_s3(source_file, bucket, prefix):
 
     try:
         logger.debug(f"Syncing to S3: {source_file} --> s3://{bucket}/{s3_object_name}")
+        # TODO Set proper mime type
         response = s3_client.upload_file(source_file, bucket, s3_object_name)
     except NoCredentialsError:
         logger.error('Credentials not available')
@@ -484,42 +485,41 @@ def normalize_images(identifier, images_file):
 
     return zip_filename
 
-
 def get_ocr(identifier):
     """
     Get the OCR for an item or part and save it to our local cache
     """
+    global bhl_object
     # Determine if we have an item or a part
-    bhl_type = None
-    bhl_item = None
-    bhl_id = None
+    if bhl_object is not None:
+        # we already have an object, let's be sure we have the OCR
+        bhl_object.get_ocr()
+    else:
+        # This should never happen, but just in case, get the object from BHL
+        bhl_object = BHL_Object(config, Identifier=identifier, OCR=True)
 
-    (bhl_type, bhl_id, bhl_item) = bhl_aws_common.get_bhl_item(config, Identifier=identifier, OCR=True)
-    if bhl_type is None:
-        (bhl_type, bhl_id, bhl_item) = bhl_aws_common.get_bhl_part(config, Identifier=identifier, OCR=True)
-
-    id_zfill = str(bhl_id).zfill(6)
-    ocr_path = get_cache_path(identifier, 'ocr') / f"{bhl_type}-{id_zfill}"
+    id_zfill = str(bhl_object.id).zfill(6)
+    ocr_path = get_cache_path(identifier, 'ocr') / f"{bhl_object.type}-{id_zfill}"
     ocr_path.mkdir(parents=True, exist_ok=True)
-    for i in range(len(bhl_item['Pages'])):
-        page_id = str(bhl_item['Pages'][i]['PageID']).zfill(8)
+    for i in range(len(bhl_object.pages)):
+        page_id = str(bhl_object.pages[i]['PageID']).zfill(8)
         seq = str(i + 1).zfill(4)
-        ocr_filename = ocr_path / f"{bhl_type}-{id_zfill}-{page_id}-{seq}.txt"
+        ocr_filename = ocr_path / f"{bhl_object.type}-{id_zfill}-{page_id}-{seq}.txt"
         ocr_text = ""
         if ocr_filename.exists():
             continue
 
         # Handle the lack of OcrText in the object, use the OcrUrl instead
-        if "OcrText" in bhl_item['Pages'][i]:
-            ocr_text = bhl_item['Pages'][i]['OcrText']
+        if "OcrText" in bhl_object.pages[i]:
+            ocr_text = bhl_object.pages[i]['OcrText']
         else:
-            url = bhl_item['Pages'][i]['OcrUrl']
+            url = bhl_object.pages[i]['OcrUrl']
             logger.info(f"OCR URL {url}")
 
             # TODO Update download_url() to return a data stream
             # instead of a filename to save us from reopening a file
             # that we just saved
-            temp_file = bhl_aws_common.download_url(config, url)
+            temp_file = download_url(url, config['general']['scratch_path'], logger)
             if temp_file is not None:
                 os.rename(temp_file, ocr_filename)
                 # Read the file we just saved
@@ -538,7 +538,7 @@ def get_ocr(identifier):
             with open(ocr_filename, 'w') as file:
                 file.write(ocr_text.replace("\n", "\r\n"))
 
-    return (ocr_path, f"{bhl_type}-{id_zfill}")
+    return (ocr_path, f"{bhl_object.type}-{id_zfill}")
 
 def combine_ocr(identifier, ocr_dir):
     path_parts = str(ocr_dir).split('/')
@@ -556,44 +556,55 @@ def combine_ocr(identifier, ocr_dir):
     return (fulltext_filename, base)
 
 def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False):
-    # Update the logger
-    fileh = logging.FileHandler(f"logs/{Identifier}.log", 'a')
-    if StdOut:
-        fileh = logging.StreamHandler(sys.stdout)
-    if Verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    # -------------------
+    # Update the logger to write to logs/IDENTIFIER.log
+    # -------------------
+    global bhl_object
+    global logger
 
+    # remove all old handlers
+    logging.getLogger().removeHandler(logging.getLogger().handlers[0])
+
+    # Send all the logging to a new file
     formatter = logging.Formatter('%(asctime)s: %(name)s: (%(levelname)s) %(message)s')
+    fileh = logging.FileHandler("{0}/{1}.log".format(Path(config['logging']['path']), Identifier), 'a')
     fileh.setFormatter(formatter)
+    logger.addHandler(fileh)
 
-    logger = logging.getLogger()     # root logger
-    for h in logger.handlers[:]:     # remove all old handlers
-        logger.removeHandler(h)
-    logger.addHandler(fileh)         # set the new handler
+    if StdOut:
+        # Also send to stdout if directed to
+        fileout = logging.StreamHandler(sys.stdout)
+        fileout.setFormatter(formatter)
+        logger.addHandler(fileout)
 
-    if Identifier is None or Identifier == '':
-        print('Did not get an identifier. Stopping.')
-        logging.error('Did not get an identifier. Stopping.')
-        sys.exit(1)
-
-    # If this is an item and it's a virtual item, we can't process it, so we check.
-    (item_type, id, bhl_object) = bhl_aws_common.get_bhl_item(config, Identifier=Identifier, OCR=False)
-    if item_type == 'virtual_item':
-        print(f"{Identifier} is a virtual item. Stopping.")
-        logging.error(f"{Identifier} is a virtual item. Stopping.")
-        sys.exit(1)
-
-   # If we didn't get an item, let's see if it's a part
+    if Verbose:
+        # also send more noise if directed to
+        logger.setLevel(logging.DEBUG)
+    
+    # -------------------
+    # Make sure we have a valid object
+    # -------------------
     if bhl_object is None:
-        (bhl_type, bhl_id, bhl_object) = bhl_aws_common.get_bhl_part(config, Identifier=Identifier, OCR=True)
+        bhl_object = BHL_Object(config, Identifier=Identifier)
 
-    if bhl_object is None:
+    if bhl_object.object is None:
+        # If it's not in BHL, we can't continue
+        # TODO: Allow us to override on the CLI. We CAN continue, but we can't get OCR if it's not in BHL
+        # TODO: Addendum: we can get the OCR from the DJVU/hOCR, but we'd be duplicating work.
         print(f"{Identifier} is not in BHL. Stopping.")
         logging.error('Identifier is not in BHL. Stopping.')
         sys.exit(1)
 
+    if bhl_object.type == 'virtual_item':
+        # If this is an item and it's a virtual item, we can't process it, so we check.
+        print(f"{Identifier} is a virtual item. Stopping.")
+        logging.error(f"{Identifier} is a virtual item. Stopping.")
+        sys.exit(1)
 
-    # if no other args were supplied, do them all
+    # ---------------
+    # Handle what data to process
+    # ---------------
+    # If no other args were supplied, do them all
     if not Images and not Scandata and not OCR:
         Images = True
         Scandata = True
@@ -605,7 +616,10 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
 
     if DryRun:
         logger.info('Dry Run selected. Not uploading to AWS.')
-    
+
+    # ---------------
+    # Let's goooo!
+    # ---------------
     try:
         jp2_dir = None
         if Images:
@@ -711,6 +725,7 @@ def clean_item(identifier):
     #     os.remove(str(scandata_file))
 
 def main():
+    global bhl_object
     # Parse the command line
     # ----------------------
     parser = argparse.ArgumentParser(
@@ -721,6 +736,12 @@ def main():
         default=None,
         required=False,
         help='Archive.org identifier for the item.'
+    )
+    parser.add_argument(
+        '--id',
+        default=None,
+        required=False,
+        help='BHL Item ID for the item.'
     )
     parser.add_argument(
         '--pop',
@@ -769,8 +790,15 @@ def main():
     # If we got an identifier from the command line, use that.
     if args.identifier:
         Identifier = args.identifier
+        logging.info(f"Processing {Identifier}")
+
+    # If we got an Item ID number from the command line, use that
+    if args.id:
+        bhl_object = BHL_Object(config, ID=args.id)
+        Identifier = bhl_object.identifier
+        logging.info(f"Processing {Identifier} from ID {args.id}")
     
-    # If we are told to use a file as queue, pop the first
+    # If we are told to use a file as queue, pop the first  
     # row from the file and use that.
     if Identifier is None and args.pop is not None: 
         Identifier = popHead(1, args.pop)[0]
@@ -778,14 +806,6 @@ def main():
     if Identifier is None: 
         print("No identifier found or provided.")
         sys.exit(64)
-
-    # If we got a number less than 60,000 we assume it's an ID number
-    # and we look for that row in the list of files
-    p = re.compile('[0-9]+$')
-    if p.match(Identifier):
-        if int(Identifier) < 600000:
-            Identifier = get_identifier_by_index(Identifier)
-            print(f"Identifier was numeric, using f{Identifier}")
 
     if args.clean:
         clean_item(Identifier)
