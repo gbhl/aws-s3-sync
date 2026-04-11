@@ -92,7 +92,7 @@ class BHL_Object:
             self.type = 'part'
             self.object = data['Result'][0]
             self.id = self.object['PartID']
-            self.identifier = self.object['BarCode']
+            self.identifier = self.object['SourceIdentifier']
             self.pages = self.object['Pages']
 
     def get_ocr(self):
