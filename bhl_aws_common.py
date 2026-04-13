@@ -19,10 +19,20 @@ def download_url(Url, Temp_Path, Logger=None):
 
     for attempt in range(max_retries):
         try:
-            response = requests.get(Url)
+            response = requests.get(Url, stream=True)
             if response.status_code == 200:
+                if Logger is not None:
+                    sz = -1
+                    if 'Content-Length' in response.headers:
+                        sz = response.headers['Content-Length']
+                    Logger.debug(f"Downloading to {temp_filepath} ({sz} bytes)")
+                bytes = 0
                 with open(temp_filepath, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=128):
+                    for chunk in response.iter_content(chunk_size=8192):
+                        bytes = bytes + 8192
+                        if bytes % 1077936128 == 0:
+                            gb = int(bytes/1077936128)
+                            Logger.debug(f"Downloaded {gb} GB")
                         f.write(chunk)
                 return temp_filepath
             elif response.status_code == 429:
@@ -34,15 +44,21 @@ def download_url(Url, Temp_Path, Logger=None):
                 else:
                     if Logger is not None:
                         Logger.error(f"Max Retries Reached for {Url}")
+                    else: 
+                        print(f"Max Retries Reached for {Url}")
                     return None
             else:
                 response.raise_for_status()
         except requests.RequestException as e:
             if Logger is not None:
                 Logger.error(e)
+            else: 
+                print(e)
             return None
         except Exception as e:
             if Logger is not None:
                 Logger.info(e)
+            else: 
+                print(e)
             return None
 
