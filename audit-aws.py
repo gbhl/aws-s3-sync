@@ -47,8 +47,8 @@ def main():
 
     if bhl_object.type == 'virtual_item':
         print(f"{Identifier} is a virtual item. Stopping.")
-
-    tag = f"{bhl_object.type}-{bhl_object.id}"
+    id_zfill = str(bhl_object.id).zfill(6)
+    tag = f"{bhl_object.type}-{id_zfill}"
 
     jp2_count      = s3_count(f"s3://bhl-open-data/images/{identifier}/")
     scandata_count = s3_count(f"s3://bhl-open-data/scandata/{identifier}_scandata.xml")
