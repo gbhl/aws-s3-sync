@@ -8,7 +8,7 @@ from pathlib import Path
 from bhl_aws_common import download_url
 
 class BHL_Object:
-    def __init__(self, Config, Identifier=None, ID=None, OCR=False):
+    def __init__(self, Config, Identifier=None, ID=None, OCR=False, Logger=None):
         self.identifier = Identifier
         self.id = ID # Item ID, never Part ID
         self.ocr = OCR
@@ -17,6 +17,7 @@ class BHL_Object:
         self.type = None
         self.api_key = Config['general']['bhl_api_key']
         self.scratch_path = Config['general']['scratch_path']
+        self.logger = Logger
 
         # If this is an item and it's a virtual item, we can't process it, so we check.
         self.get_bhl_item()
@@ -41,7 +42,7 @@ class BHL_Object:
         else:
             return
 
-        temp_file = download_url(url, self.scratch_path)
+        temp_file = download_url(url, self.scratch_path, Logger=self.logger)
 
         # Let's hope we always get some data
         if temp_file is None:
@@ -78,7 +79,7 @@ class BHL_Object:
         else:
             return
 
-        temp_file = download_url(url, self.scratch_path)
+        temp_file = download_url(url, self.scratch_path, Logger=self.logger)
 
         if temp_file is None:
             return
