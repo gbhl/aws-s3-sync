@@ -360,37 +360,81 @@ def create_webp_files(identifier, input_dir, output_dir):
         logger.debug(f"WebP Source: {jp2_base}.jp2")
 
         # Save full size webp
-        
+
         try:
             img = pyvips.Image.new_from_file(input_file, access='sequential')
             img_w = img.width
             img_h = img.height
+
+            # webp images are limited to 16383 x 16383 but this will cause memory problems
+            # Scale the image down per the config setting
+            # Note: This will still use up to 4 GB of resident RAM. 
+            img_max_pixels = int(config['general']['max_image_dimension'])
+            if img_w > img_max_pixels or img_h > img_max_pixels:
+                logger.warning(f"Image {input_file} is too large ({img_w}x{img_h}). Resizing to {img_max_pixels} px.")
+                img = img.resize(img_max_pixels / max(img_w, img_h))
+            else: 
+                logger.debug(f"Image {input_file} size: {img_w} x {img_h}")
+
             img.write_to_file(output_file, Q=config['general']['webp_quality'])
         except Exception as e:
-            logger.warning(f"VIPS error for {jp2_base}.jp2: {e}")
-            logger.warning('Falling back to ImageMagic/Wand')
-            # Something went wrong, fall back to ImagageMagick Wand module
-            img = Image(filename=input_file)
-            img_w, img_h = img.size
-            img.compression_quality = config['general']['webp_quality']
-            img_webp = img.convert('webp')
-            img_webp.save(filename=output_file)
-            # Since we use 'input_file' below for the thumbnails, point us to
-            # the webp file we just created
-            input_file = output_file
+            try:
+                logger.error(f"VIPS error for {jp2_base}.jp2: {e}")
+                logger.error('Falling back to ImageMagic/Wand')
+                # Something went wrong, fall back to ImagageMagick Wand module
+                img = Image(filename=input_file)
+                img_w, img_h = img.size
+
+                if img_w > img_max_pixels:
+                    logger.warning(f"Image too large ({img_w}x{img_h}) Resizing to {img_max_pixels} px.")
+                    img = img.resize(img_max_pixels, int(img_h * (img_max_pixels / img_w)))
+                elif img_h > img_max_pixels:
+                    logger.warning(f"Image too large ({img_w}x{img_h}) Resizing to {img_max_pixels} px.")
+                    img = img.resize(int(img_w * (img_max_pixels / img_h)), img_max_pixels)
+
+                img.compression_quality = config['general']['webp_quality']
+                img_webp = img.convert('webp')
+                img_webp.save(filename=output_file)
+                # Since we use 'input_file' below for the thumbnails, point us to
+                # the webp file we just created
+                input_file = output_file
+            except Exception as e:
+                logger.error(f"File {output_file} could not be saved. Continuing.")
 
         # resize to webp
         for size_name in config['webp_sizes']:
             target_width = config['webp_sizes'][size_name]
             logger.debug(f"WebP Source: {jp2_base}.jp2 -> {size_name}")
             # calculate the resize factors using the current width and the desired width
-            factor = target_width / img_w
+            # We don't upscale. So ensure the factor isn't < 1
+            factor = min(target_width / img_w, 1)
             th_h = int(factor * img_h)
+            th_w = int(factor * img_w)
 
             thumb_file = output_dir / f"{jp2_base}_{size_name}.webp"
-            if not thumb_file.exists():
-                thumb = pyvips.Image.thumbnail(input_file, th_h)
-                thumb.write_to_file(thumb_file)
+
+            try:
+                if not thumb_file.exists():
+                    thumb = pyvips.Image.thumbnail(input_file, th_h)
+                    thumb.write_to_file(thumb_file)
+                
+                if os.path.getsize(thumb_file) == 0:
+                    logger.warning(f"Thumbnail {input_file} was empty.")
+                    thumb = pyvips.Image.thumbnail(input_file, th_h)
+                    thumb.write_to_file(thumb_file)
+            except Exception as e:
+                try: 
+                    # Something went wrong, fall back to ImagageMagick Wand module
+                    logger.error(f"VIPS error for thumbnal {jp2_base}.jp2: {e}")
+                    logger.error('Falling back to ImageMagic/Wand')
+                    img = Image(filename=input_file)
+                    img = img.resize(th_w, th_h)
+                    img.compression_quality = config['general']['webp_quality']
+                    img_webp = img.convert('webp')
+                    img_webp.save(filename=thumb_file)
+                except Exception as e:
+                    logger.error(f"File {thumb_file} could not be saved. Continuing.")
+
 
     return(str(output_dir))
 
@@ -497,7 +541,7 @@ def get_ocr(identifier):
         bhl_object.get_ocr()
     else:
         # This should never happen, but just in case, get the object from BHL
-        bhl_object = BHL_Object(config, Identifier=identifier, OCR=True)
+        bhl_object = BHL_Object(config, Identifier=identifier, OCR=True, Logger=logger)
 
     id_zfill = str(bhl_object.id).zfill(6)
     ocr_path = get_cache_path(identifier, 'ocr') / f"{bhl_object.type}-{id_zfill}"
@@ -586,7 +630,7 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
     # Make sure we have a valid object
     # -------------------
     if bhl_object is None:
-        bhl_object = BHL_Object(config, Identifier=Identifier)
+        bhl_object = BHL_Object(config, Identifier=Identifier, Logger=logger)
 
     if bhl_object.object is None:
         # If it's not in BHL, we can't continue
@@ -795,7 +839,7 @@ def main():
 
     # If we got an Item ID number from the command line, use that
     if args.id:
-        bhl_object = BHL_Object(config, ID=args.id)
+        bhl_object = BHL_Object(config, ID=args.id, Logger=logging)
         Identifier = bhl_object.identifier
         logging.info(f"Processing {Identifier} from ID {args.id}")
     
