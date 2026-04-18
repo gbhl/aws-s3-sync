@@ -128,6 +128,18 @@ The script needs certain values.
 * WebP Name and Sizes which should not be changed
 * Log path and filename
 
+
+## systemd Daemon
+
+The `monitor-queue.py` script is started from systemd. Every minute, it checks the two message queues defined in the `[rabbitmq]` section of the `config.toml` file. 
+
+The queues contains identifiers of items that need updating.
+
+When a new message appears on either queue, an instance of `update-aws-item.py` is called to process the identifier with the `--ocr-only` option applied for messages in the `ocr-only-queue`. 
+
+The `concurrency` setting in the config file controls how many copies of `update-aws-item.py` can be running at the same time.
+
+
 ## Notes
 
 ### Scandata File

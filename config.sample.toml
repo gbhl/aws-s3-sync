@@ -21,3 +21,12 @@ medium = 465
 small = 235
 thumb = 150
 
+[rabbitmq]
+host = ""
+port = 5672
+vhost = "/"
+username = "guest"
+password = "guest"
+full-items-queue = ""
+ocr-only-queue = ""
+concurrency = 1

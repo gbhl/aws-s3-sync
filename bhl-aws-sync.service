@@ -1,0 +1,19 @@
+[Unit]
+Description=BHL-to-AWS S3 Sync Queue Monitor
+Documentation=https://github.com/gbhl/aws-s3-sync
+After=network-online.target rabbitmq-server.service
+Wants=network-online.target rabbitmq-server.service
+
+[Service]
+Type=simple
+User=joel
+WorkingDirectory=/mnt/home-old/BHL/aws-s3-sync
+ExecStart=/mnt/home-old/BHL/aws-s3-sync/venv/bin/python monitor-queue.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bhl-aws-sync
+
+[Install]
+WantedBy=multi-user.target
