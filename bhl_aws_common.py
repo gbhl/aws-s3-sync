@@ -25,7 +25,6 @@ def download_url(Url, Temp_Path, Logger=None):
                     sz = -1
                     if 'Content-Length' in response.headers:
                         sz = response.headers['Content-Length']
-                    Logger.debug(f"Downloading to {temp_filepath} ({sz} bytes)")
                 bytes = 0
                 with open(temp_filepath, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
