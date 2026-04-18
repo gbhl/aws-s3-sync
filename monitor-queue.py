@@ -124,9 +124,11 @@ def read_queues(rmq_config, slots):
 
         for queue, ocr_only in [(full_queue, False), (ocr_queue, True)]:
             while len(spawned) < slots:
-                identifier, tag = read_queue(channel, queue)
-                if identifier is None:
+                message, tag = read_queue(channel, queue)
+                if message is None:
                     break
+                msg_parts = message.split("|")
+                identifier = msg_parts[2]
                 proc = start_worker(identifier, ocr_only=ocr_only)
                 channel.basic_ack(delivery_tag=tag)
                 spawned.append(proc)
