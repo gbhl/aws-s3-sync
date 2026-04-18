@@ -42,7 +42,7 @@ The Linux `parallel` command may be used together with the same list of identife
 This will run eight (8) copies of the script until all items are processed. The `./logs/` 
 folder should be monitored for progress and output.
 
-`cat LIST.TXT | parallel -j 8 python update-aws-item.py --identifier`
+`cat LIST.TXT | parallel -j 8 --delay 1s python update-aws-item.py --identifier`
 
 
 ## Options
@@ -131,11 +131,11 @@ The script needs certain values.
 
 ## systemd Daemon
 
-The `monitor-queue.py` script is started from systemd. Every minute, it checks the two message queues defined in the `[rabbitmq]` section of the `config.toml` file. 
+The `monitor-queue.py` script is started from systemd. Every minute, it checks the message queues defined in the `[queues]` section of the `config.toml` file. 
 
-The queues contains identifiers of items that need updating.
+The queues contains type, ID, and identifiers of items that need updating.
 
-When a new message appears on either queue, an instance of `update-aws-item.py` is called to process the identifier with the `--ocr-only` option applied for messages in the `ocr-only-queue`. 
+When a new message appears on a queue, an instance of `update-aws-item.py` is called to process the identifier with the `--ocr-only` option applied for messages in the `ocr-only`. 
 
 The `concurrency` setting in the config file controls how many copies of `update-aws-item.py` can be running at the same time.
 
