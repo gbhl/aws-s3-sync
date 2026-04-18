@@ -27,6 +27,9 @@ port = 5672
 vhost = "/"
 username = "guest"
 password = "guest"
-full-items-queue = ""
-ocr-only-queue = ""
 concurrency = 1
+
+[queues]
+new-items = ""
+updated-items = ""
+ocr-only = ""

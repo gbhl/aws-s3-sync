@@ -2,10 +2,13 @@
 """
 Monitor RabbitMQ queues and runs update-aws-item.py workers.
 
-Polls full-items-queue and ocr-only-queue every 60 seconds.
+Polls three message queues every 60 seconds.
 Runs update-aws-item.py for each message, respecting the concurrency limit.
-Messages in ocr-only-queue are processed with the --ocr-only flag.
+Messages in the ocr-only queue are processed with the --ocr-only flag.
 """
+
+# TODO Put things in the error queue when the child does not finish cleanly
+
 
 import sys
 import os
@@ -37,7 +40,7 @@ logging.basicConfig(
     format="%(asctime)s: %(module)s (%(levelname)s): %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger('monitor-queue')
+logger = logging.getLogger('bhl-s3-queuemon')
 
 # Mirror log output to stdout so systemd journal captures it
 stdout_handler = logging.StreamHandler(sys.stdout)
@@ -109,20 +112,22 @@ def start_worker(identifier, ocr_only=False):
     return subprocess.Popen(cmd, cwd=PROJECT_DIR)
 
 
-def read_queues(rmq_config, slots):
+def read_queues(rmq_config, queues, slots):
     """
     Open a connection, pull up to `slots` messages across both queues, and
-    return a list of spawned subprocesses.  Full-items queue is preferred.
+    return a list of spawned subprocesses.  New-items queue is preferred over 
+    ocr_items and updated-items.
     """
-    full_queue = rmq_config['full-items-queue']
-    ocr_queue = rmq_config['ocr-only-queue']
+    new_queue = queues['new_items']
+    updated_queue = queues['updated_items']
+    ocr_queue = queues['ocr_only']
     spawned = []
 
     try:
         connection = connect(rmq_config)
         channel = connection.channel()
 
-        for queue, ocr_only in [(full_queue, False), (ocr_queue, True)]:
+        for queue, ocr_only in [(new_queue, False), (ocr_queue, True), (updated_queue, False)]:
             while len(spawned) < slots:
                 message, tag = read_queue(channel, queue)
                 if message is None:
@@ -144,10 +149,11 @@ def read_queues(rmq_config, slots):
 
 def main():
     rmq = config['rabbitmq']
+    queues = config['queues']
     concurrency = int(rmq.get('concurrency', 1))
 
     logger.info(f"Starting monitor-queue (concurrency={concurrency})")
-    logger.info(f"Full queue: '{rmq['full-items-queue']}'  |  OCR queue: '{rmq['ocr-only-queue']}'")
+    logger.info(f"New Items: '{queues['new_items']}'  | Updates Items: '{queues['updated_items']}' | OCR queue: '{queues['ocr_only']}'")
 
     processes = []
 
@@ -156,7 +162,7 @@ def main():
         slots = concurrency - len(processes)
 
         if slots > 0:
-            new_procs = read_queues(rmq, slots)
+            new_procs = read_queues(rmq, queues, slots)
             processes.extend(new_procs)
 
         time.sleep(POLL_INTERVAL)

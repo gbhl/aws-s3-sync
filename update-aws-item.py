@@ -309,7 +309,9 @@ def rename_jp2_files(zip_filename, pages, dest_dir, identifier):
             # Try to find the file in the zip (might have .jp2 extension)
             jp2_name = None
             for name in input_zip.namelist():
-                if orig_name in name or orig_name.replace('.tif', '.jp2') in name:
+                # TODO This should really look at the sequence number
+                if (str(orig_name).lower() in str(name).lower() or 
+                        str(orig_name).lower().replace('.tif', '.jp2') in str(name).lower()):
                     jp2_name = name
                     break
 
@@ -472,7 +474,11 @@ def sync_file_to_aws_s3(source_file, bucket, prefix):
 def normalize_images(identifier, images_file):
     # if we got anything but JP2, we convert to JP2
     # What kind of file do we have? ZIP or TAR
-    if str(images_file).lower().endswith(f"{identifier}_jp2.zip"):
+    if str(images_file).lower().endswith("_jp2.zip"):
+        # Normalize the filename, just in case
+        if os.path.basename(images_file) != f"{identifier}_jp2.zip":
+            new_images_file = Path(os.path.dirname(images_file)) / f"{identifier}_jp2.zip"
+            os.rename(images_file, new_images_file)
         return images_file
 
     tmp_path = tempfile.mkdtemp(dir=config['general']['scratch_path'])
