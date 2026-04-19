@@ -31,6 +31,12 @@ The script will check for any cached files and update these types of files at AW
 * Combined OCR (All OCR files combined into one text file)
 * IA Scandata (page-level metadata)
 
+```
+python audit-aws.py IDENTIFIER
+```
+This will give a quick summary of the counts of items at AWS and compare to the expected counts of files according to the scandata. Returns "OK"/"Not OK". 
+
+
 ## Advanced Usage
 
 To process a list of items, this command may be useful:
@@ -139,6 +145,25 @@ When a new message appears on a queue, an instance of `update-aws-item.py` is ca
 
 The `concurrency` setting in the config file controls how many copies of `update-aws-item.py` can be running at the same time.
 
+
+## Auditing
+
+The `audit-aws.py` script sometimes returns couns of files at AWS that are greater than what is expected. Example:
+
+```
+Item Summary:  mobot31753002623988 (item-128881)
+JP2 Files:     499
+-------------- Actual / Expected / (OK/Not-OK)
+Scandata:      2/1 (OK)
+OCR Files:     518/500 (OK)
+WEBP Files:    2495/2495 (OK)
+```
+
+For the **Scandata** happens when a `scandata.xml_meta.txt` file is uploaded by accident. 
+
+For **OCR Files**, this happens when pages were changed and realigned in BHL: The PageID-SequenceNum combination are different and old pages are left on S3. The `update-aws-item.py` script does not delete files at AWS S3, so the duplicates remain.
+
+**WEBP files** should always be correct, but in cases of image file corruption or missing images, the actual count will be lower.
 
 ## Notes
 

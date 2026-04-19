@@ -201,8 +201,19 @@ def get_images(identifier):
 
     if images_filename is None:
         for file in metadata['files']:
-            if (file['format'] == 'Single Page Processed TIFF ZIP' or
-                file['format'] == 'Single Page Processed TIFF TAR'):
+            if (file['format'] == 'Single Page Processed TIFF ZIP'):
+                images_filename = file['name']
+                images_mtime = file['mtime']
+
+    if images_filename is None:
+        for file in metadata['files']:
+            if (file['format'] == 'Single Page Processed TIFF TAR'):
+                images_filename = file['name']
+                images_mtime = file['mtime']
+
+    if images_filename is None:
+        for file in metadata['files']:
+            if (file['format'] == 'Single Page Original TIFF ZIP'):
                 images_filename = file['name']
                 images_mtime = file['mtime']
 
@@ -479,7 +490,7 @@ def normalize_images(identifier, images_file):
         if os.path.basename(images_file) != f"{identifier}_jp2.zip":
             new_images_file = Path(os.path.dirname(images_file)) / f"{identifier}_jp2.zip"
             os.rename(images_file, new_images_file)
-        return images_file
+            images_file = new_images_file
 
     tmp_path = tempfile.mkdtemp(dir=config['general']['scratch_path'])
     if str(images_file).lower().endswith(('.zip', '.ZIP')):
@@ -588,6 +599,10 @@ def get_ocr(identifier):
             # Linux line endings
             with open(ocr_filename, 'w') as file:
                 file.write(ocr_text.replace("\n", "\r\n"))
+        else:
+            with open(ocr_filename, 'w') as file:
+                file.write(ocr_text)
+
 
     return (ocr_path, f"{bhl_object.type}-{id_zfill}")
 
