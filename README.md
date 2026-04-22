@@ -169,7 +169,7 @@ WEBP Files:    2495/2495 (OK)
 
 ## Known bugs
 
-* When OCR changes from a page update or insertion, existing OCR is not deleted at AWS and new OCR is uploaded. There are differences in the old and new filenames and the old are left on AWS. This is a bit wasteful and also causes a false positive error in the audit script, but the script is configured to allow this and report an OK status. Example:
+* When OCR changes from a page realignment or insertion, existing OCR is not deleted at AWS and new OCR is uploaded. There are differences in the old and new filenames and the old are left on AWS. This is a bit wasteful and also causes a false positive error in the audit script, but the script is configured to allow this and report an OK status. Example:
 
 ```
 Summary:       notessurlledel00mail (item-048997)
