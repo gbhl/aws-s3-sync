@@ -70,7 +70,7 @@ Removes files from the local cache. Does not remove `scandata.xml`. Downloads al
 `--stdout`  
 Outputs progress to STDOUT instead of the log file.
 
-`--keep-downloads` 
+`--keep-downloads`  
 Does not delete files downloaded to the cache and temp directories.
 
 `--verbose`  
