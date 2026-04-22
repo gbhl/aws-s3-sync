@@ -463,7 +463,7 @@ def sync_dir_to_aws_s3(source_path, pattern, bucket, prefix):
         try:
             logger.debug(f"Syncing to S3: {file} --> s3://{bucket}/{s3_object_name}")
             m_type = mimetypes.guess_type(file)
-            response = s3_client.upload_file(file, bucket, s3_object_name, {"ContentType": m_type[0]})
+            response = s3_client.upload_file(file, bucket, s3_object_name, {"ContentType": m_type[0], "StorageClass": "INTELLIGENT_TIERING"})
         except NoCredentialsError:
             logger.error('Credentials not available')
         except Exception as e:
@@ -476,7 +476,7 @@ def sync_file_to_aws_s3(source_file, bucket, prefix):
     try:
         logger.debug(f"Syncing to S3: {source_file} --> s3://{bucket}/{s3_object_name}")
         m_type = mimetypes.guess_type(source_file)
-        response = s3_client.upload_file(source_file, bucket, s3_object_name, {"ContentType": m_type[0]})
+        response = s3_client.upload_file(source_file, bucket, s3_object_name, {"ContentType": m_type[0], "StorageClass": "INTELLIGENT_TIERING"})
     except NoCredentialsError:
         logger.error('Credentials not available')
     except Exception as e:
