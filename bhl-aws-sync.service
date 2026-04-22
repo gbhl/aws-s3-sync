@@ -10,6 +10,7 @@ User=USERNAME
 group=GROUPNAME
 WorkingDirectory=/PATH/TO/INSTALL/aws-s3-sync
 ExecStart=/PATH/TO/INSTALL/venv/bin/python monitor-queue.py
+Nice=1
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal
