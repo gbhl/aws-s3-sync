@@ -7,9 +7,6 @@ Runs update-aws-item.py for each message, respecting the concurrency limit.
 Messages in the ocr-only queue are processed with the --ocr-only flag.
 """
 
-# TODO Put things in the error queue when the child does not finish cleanly
-
-
 import sys
 import os
 import subprocess
@@ -40,12 +37,19 @@ logging.basicConfig(
     format="%(asctime)s: %(module)s (%(levelname)s): %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger('bhl-s3-queuemon')
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+# Silence other loggers
+for log_name, log_obj in logging.Logger.manager.loggerDict.items():
+     if log_name != __name__:
+          log_obj.disabled = True
 
 # Mirror log output to stdout so systemd journal captures it
 stdout_handler = logging.StreamHandler(sys.stdout)
 stdout_handler.setFormatter(logging.Formatter("%(asctime)s: %(module)s (%(levelname)s): %(message)s"))
 logger.addHandler(stdout_handler)
+
 
 
 def check_processes(processes):
