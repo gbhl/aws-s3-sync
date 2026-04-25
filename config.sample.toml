@@ -33,3 +33,4 @@ concurrency = 1
 new-items = ""
 updated-items = ""
 ocr-only = ""
+error_queue_suffix = ".error"  # optional: failed items are re-published here
