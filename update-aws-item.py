@@ -359,7 +359,7 @@ def create_webp_files(identifier, input_dir, output_dir):
 
     if not jp2_files:
         logger.error(f"No JP2 files found in '{input_dir}'")
-        sys.exit()
+        sys.exit(1)
 
     # convert JP2 to full-size WEBP
     for j in jp2_files:
@@ -695,7 +695,7 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
             scandata_file = download_file(Identifier, "scandata")
             if scandata_file is None:
                 logger.error('Scandata not found.')
-                sys.exit()
+                sys.exit(1)
 
             # Download and normalize images
             # -----------------------------
@@ -708,7 +708,7 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
 
             if jp2_file is None:
                 logger.error('Images not found')
-                sys.exit()
+                sys.exit(1)
 
             # Parse scandata.xml
             # ------------------
