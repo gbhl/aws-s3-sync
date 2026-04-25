@@ -70,6 +70,9 @@ Removes files from the local cache. Does not remove `scandata.xml`. Downloads al
 `--stdout`  
 Outputs progress to STDOUT instead of the log file.
 
+`--keep-downloads`  
+Does not delete files downloaded to the cache and temp directories.
+
 `--verbose`  
 Output many more details of progress.
 
@@ -134,6 +137,9 @@ The script needs certain values.
 * WebP Name and Sizes which should not be changed
 * Log path and filename
 
+When running as a daemon on Linux
+* RabbitMQ message queue connection info
+* Names of the three queues to monitor: new, updaed, ocr-only
 
 ## systemd Daemon
 
@@ -148,22 +154,31 @@ The `concurrency` setting in the config file controls how many copies of `update
 
 ## Auditing
 
-The `audit-aws.py` script sometimes returns couns of files at AWS that are greater than what is expected. Example:
+The `audit-aws.py` script returns counts of files at AWS to compare to what is expected. A quick look indicates if an item needs to be uploaded or refreshed at AWS.
+
+Example:
 
 ```
 Item Summary:  mobot31753002623988 (item-128881)
 JP2 Files:     499
 -------------- Actual / Expected / (OK/Not-OK)
 Scandata:      2/1 (OK)
-OCR Files:     518/500 (OK)
+OCR Files:     500/500 (OK)
 WEBP Files:    2495/2495 (OK)
 ```
 
-For the **Scandata** happens when a `scandata.xml_meta.txt` file is uploaded by accident. 
+## Known bugs
 
-For **OCR Files**, this happens when pages were changed and realigned in BHL: The PageID-SequenceNum combination are different and old pages are left on S3. The `update-aws-item.py` script does not delete files at AWS S3, so the duplicates remain.
+* When OCR changes from a page realignment or insertion, existing OCR is not deleted at AWS and new OCR is uploaded. There are differences in the old and new filenames and the old are left on AWS. This is a bit wasteful and also causes a false positive error in the audit script, but the script is configured to allow this and report an OK status. Example:
 
-**WEBP files** should always be correct, but in cases of image file corruption or missing images, the actual count will be lower.
+```
+Summary:       notessurlledel00mail (item-048997)
+  JP2 Files:   654
+  ------------ Actual / Expected / (OK/Not-OK)
+  Scandata:    1/1 (OK)
+  OCR Files:   722/655 (OK)   <---- Actual is greater than Expected
+  WEBP Files:  3270/3270 (OK)
+```
 
 ## Notes
 

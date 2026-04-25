@@ -463,7 +463,7 @@ def sync_dir_to_aws_s3(source_path, pattern, bucket, prefix):
         try:
             logger.debug(f"Syncing to S3: {file} --> s3://{bucket}/{s3_object_name}")
             m_type = mimetypes.guess_type(file)
-            response = s3_client.upload_file(file, bucket, s3_object_name, {"ContentType": m_type[0]})
+            response = s3_client.upload_file(file, bucket, s3_object_name, {"ContentType": m_type[0], "StorageClass": "INTELLIGENT_TIERING"})
         except NoCredentialsError:
             logger.error('Credentials not available')
         except Exception as e:
@@ -476,7 +476,7 @@ def sync_file_to_aws_s3(source_file, bucket, prefix):
     try:
         logger.debug(f"Syncing to S3: {source_file} --> s3://{bucket}/{s3_object_name}")
         m_type = mimetypes.guess_type(source_file)
-        response = s3_client.upload_file(source_file, bucket, s3_object_name, {"ContentType": m_type[0]})
+        response = s3_client.upload_file(source_file, bucket, s3_object_name, {"ContentType": m_type[0], "StorageClass": "INTELLIGENT_TIERING"})
     except NoCredentialsError:
         logger.error('Credentials not available')
     except Exception as e:
@@ -521,8 +521,8 @@ def normalize_images(identifier, images_file):
     if not image_files:
         image_files = list(tmp_path.glob('*/*.jpg')) + list(tmp_path.glob('*/*.JPG'))
 
-    jp2_tmp_path = tempfile.mkdtemp(dir=config['general']['scratch_path'])
-    jp2_tmp_path = Path(jp2_tmp_path) / f"{identifier}_jp2"
+    jp2_tmp = tempfile.mkdtemp(dir=config['general']['scratch_path'])
+    jp2_tmp_path = Path(jp2_tmp) / f"{identifier}_jp2"
     jp2_tmp_path.mkdir(parents=True, exist_ok=True)
     for input_file in image_files:
         match = re.search("_([0-9]{4})$", input_file.stem)
@@ -543,7 +543,7 @@ def normalize_images(identifier, images_file):
 
     # Cleanup
     shutil.rmtree(tmp_path)
-    shutil.rmtree(jp2_tmp_path)
+    shutil.rmtree(jp2_tmp)
 
     return zip_filename
 
@@ -621,7 +621,7 @@ def combine_ocr(identifier, ocr_dir):
 
     return (fulltext_filename, base)
 
-def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False):
+def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False, Cleanup=True):
     # -------------------
     # Update the logger to write to logs/IDENTIFIER.log
     # -------------------
@@ -762,16 +762,21 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
 
         # Cleanup
         # -------
-        logger.info('Cleanup')
-        try:
+        if Cleanup: 
+            logger.info('Cleanup')
             if jp2_dir is not None:
                 shutil.rmtree(jp2_dir)
-        except OSError as e:
-            if e.strerror == "Directory not empty":
-                # Not sure why this happens, but trying again seems to fix it usually?
-                shutil.rmtree(jp2_dir)
-            else:
-                logger.error(e.strerror)
+            if ocr_dir is not None:
+                shutil.rmtree(ocr_dir)
+            if scandata_file is not None:
+                os.remove(scandata_file)
+            if jp2_file is not None:
+                os.remove(jp2_file)
+            json_file = download_file(Identifier, "metadata")
+            if json_file is not None:
+                os.remove(json_file)
+        else:
+            logger.info('Cleanup: Keeping Downloads')
 
     except Exception as e:
         logger.error(e)
@@ -841,6 +846,11 @@ def main():
         help='Output to STDOUT as well as the log file'
     )
     parser.add_argument(
+        '--keep-downloads',
+        action='store_false',
+        help='Don\'t delete downloaded files and derivatives in cache and temp directories.'
+    )
+    parser.add_argument(
         '--verbose',
         action='store_true',
         help='Output more info. (logging=DEBUG)'
@@ -851,6 +861,10 @@ def main():
         help='Do everything except upload to AWS'
     )
     args = parser.parse_args()
+
+    # Make sure this exists
+    tmp = Path(config['general']['scratch_path'])
+    tmp.mkdir(parents=True, exist_ok=True)
 
     Identifier = None
     # If we got an identifier from the command line, use that.
@@ -883,7 +897,8 @@ def main():
         OCR = args.ocr_only,
         StdOut = args.stdout,
         Verbose = args.verbose,
-        DryRun = args.dryrun
+        DryRun = args.dryrun,
+        Cleanup = args.keep_downloads
     )
 
 if __name__ == "__main__":

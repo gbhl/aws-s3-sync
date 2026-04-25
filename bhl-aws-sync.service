@@ -6,9 +6,11 @@ Wants=network-online.target rabbitmq-server.service
 
 [Service]
 Type=simple
-User=joel
-WorkingDirectory=/mnt/home-old/BHL/aws-s3-sync
-ExecStart=/mnt/home-old/BHL/aws-s3-sync/venv/bin/python monitor-queue.py
+User=USERNAME
+group=GROUPNAME
+WorkingDirectory=/PATH/TO/INSTALL/aws-s3-sync
+ExecStart=/PATH/TO/INSTALL/venv/bin/python monitor-queue.py
+Nice=1
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal

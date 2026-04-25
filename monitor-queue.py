@@ -38,7 +38,13 @@ logging.basicConfig(
     format="%(asctime)s: %(module)s (%(levelname)s): %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger('bhl-s3-queuemon')
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+# Silence other loggers
+for log_name, log_obj in logging.Logger.manager.loggerDict.items():
+     if log_name != __name__:
+          log_obj.disabled = True
 
 # Mirror log output to stdout so systemd journal captures it
 stdout_handler = logging.StreamHandler(sys.stdout)
@@ -154,9 +160,11 @@ def read_queues(rmq_config, queues, slots):
 
         for queue, ocr_only in [(new_queue, False), (ocr_queue, True), (updated_queue, False)]:
             while len(spawned) < slots:
-                identifier, tag = read_queue(channel, queue)
-                if identifier is None:
+                message, tag = read_queue(channel, queue)
+                if message is None:
                     break
+                msg_parts = message.split("|")
+                identifier = msg_parts[2]
                 proc = start_worker(identifier, ocr_only=ocr_only)
                 channel.basic_ack(delivery_tag=tag)
                 spawned.append((proc, identifier, queue))

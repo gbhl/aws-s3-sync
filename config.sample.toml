@@ -30,7 +30,7 @@ password = "guest"
 concurrency = 1
 
 [queues]
-new-items = ""
-updated-items = ""
-ocr-only = ""
+new_items = ""
+updated_items = ""
+ocr_only = ""
 error_queue_suffix = ".error"  # optional: failed items are re-published here
