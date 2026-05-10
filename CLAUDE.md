@@ -45,7 +45,7 @@ The codebase has three layers:
 
 ### systemd daemon (monitor-queue.py)
 
-`monitor-queue.py` is a script that runs as a systemd service. It polls two RabbitMQ queues defined in `config.toml` (`[queues]` section: `new-items`, `updated-itemd`, `ocr-only`) and spawns `update-aws-item.py` subprocesses up to the `concurrency` limit. Messages in `ocr-only` get the `--ocr-only` flag.
+`monitor-queue.py` is a script that runs as a systemd service. It polls two RabbitMQ queues defined in `config.toml` (`[queues]` section: `new-items`, `updated-items`, `ocr-only`) and spawns `update-aws-item.py` subprocesses up to the `concurrency` limit. Messages in `ocr-only` get the `--ocr-only` flag. Errors are requeued to a queue name with the ".error" suffix.
 
 ## config.toml sections
 

@@ -5,6 +5,7 @@ Monitor RabbitMQ queues and runs update-aws-item.py workers.
 Polls three message queues every 60 seconds.
 Runs update-aws-item.py for each message, respecting the concurrency limit.
 Messages in the ocr-only queue are processed with the --ocr-only flag.
+Failed workers (non-zero exit) are re-queued to the error queue if configured.
 """
 
 import sys
@@ -51,25 +52,51 @@ stdout_handler.setFormatter(logging.Formatter("%(asctime)s: %(module)s (%(leveln
 logger.addHandler(stdout_handler)
 
 
+def publish_to_error_queue(rmq_config, error_queue_suffix, identifiers):
+    """Publish a list of identifiers to the error queue."""
+    try:
+        connection = connect(rmq_config)
+        channel = connection.channel()
+        for identifier, queue in identifiers:
+            error_queue = f"{queue}{error_queue_suffix}"
+            channel.queue_declare(queue=error_queue, durable=True)
+            channel.basic_publish(
+                exchange='',
+                routing_key=error_queue,
+                body=identifier.encode('utf-8'),
+                properties=pika.BasicProperties(delivery_mode=2),
+            )
+            logger.info(f"Re-queued failed identifier to '{error_queue}': {identifier}")
+        connection.close()
+    except Exception as e:
+        logger.error(f"Failed to publish to error queue '{error_queue}': {e}")
+        logger.error(f"Identifiers that were NOT re-queued: {identifiers}")
 
-def check_processes(processes):
-    """Remove finished subprocesses from the list and log their exit status."""
+
+def check_processes(processes, rmq_config=None, error_queue_suffix=None):
+    """Remove finished subprocesses from the list and log their exit status.
+
+    If rmq_config and error_queue are provided, failed workers are re-published
+    to the error queue.
+    """
     still_running = []
-    for p in processes:
+    failed = []
+    for p, identifier, queue in processes:
         rc = p.poll()
         if rc is None:
-            still_running.append(p)
+            still_running.append((p, identifier, queue))
         else:
-            identifier = '?'
-            try:
-                idx = p.args.index('--identifier')
-                identifier = p.args[idx + 1]
-            except (ValueError, IndexError):
-                pass
             if rc == 0:
                 logger.info(f"Worker finished: {identifier}")
             else:
                 logger.warning(f"Worker exited with code {rc}: {identifier}")
+                failed.append(identifier, queue)
+
+    if failed and rmq_config and error_queue:
+        publish_to_error_queue(rmq_config, error_queue_suffix, failed)
+    elif failed:
+        logger.warning(f"No error queue configured — failed identifiers dropped: {failed}")
+
     return still_running
 
 
@@ -140,7 +167,7 @@ def read_queues(rmq_config, queues, slots):
                 identifier = msg_parts[2]
                 proc = start_worker(identifier, ocr_only=ocr_only)
                 channel.basic_ack(delivery_tag=tag)
-                spawned.append(proc)
+                spawned.append((proc, identifier, queue))
 
         connection.close()
     except pika.exceptions.AMQPConnectionError as e:
@@ -155,14 +182,19 @@ def main():
     rmq = config['rabbitmq']
     queues = config['queues']
     concurrency = int(rmq.get('concurrency', 1))
+    error_queue = queues.get('error_queue', '').strip() or None
 
     logger.info(f"Starting monitor-queue (concurrency={concurrency})")
     logger.info(f"New Items: '{queues['new_items']}'  | Updates Items: '{queues['updated_items']}' | OCR queue: '{queues['ocr_only']}'")
+    if error_queue_suffix:
+        logger.info(f"Error queue suffix: '{error_queue_suffix}'")
+    else:
+        logger.warning("No error queue suffix configured — failed workers will only be logged")
 
     processes = []
 
     while True:
-        processes = check_processes(processes)
+        processes = check_processes(processes, rmq_config=rmq, error_queue_suffix=error_queue_suffix)
         slots = concurrency - len(processes)
 
         if slots > 0:

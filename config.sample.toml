@@ -34,6 +34,7 @@ concurrency = 1
 new_items = ""
 updated_items = ""
 ocr_only = ""
+error_queue_suffix = ".error"  # optional: failed items are re-published here
 
 [internet_archive]
 s3_access_key = ""
