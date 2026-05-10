@@ -2,7 +2,10 @@ import tempfile
 import requests
 import logging
 import time
+import re
+import boto3
 from pathlib import Path
+from bhl_object import BHL_Object
 
 def download_url(Url, Temp_Path, Logger=None, Config=None):
     """
@@ -68,3 +71,72 @@ def download_url(Url, Temp_Path, Logger=None, Config=None):
                 print(e)
             return None
 
+def get_namespace(element):
+    m = re.match("{.*}", element.tag)
+    return m.group(0) if m else ''
+
+def count_s3_items(bucket, prefix, filter=None):
+    s3_session = boto3.Session('default')
+    s3_client = boto3.client('s3', aws_session_token=s3_session)
+    
+    """
+    Count the number of items (objects) in a given AWS S3 path with
+    an optional filter string.
+    """
+    paginator = s3_client.get_paginator('list_objects_v2')
+    count = 0
+    try:
+        # Paginate through all objects matching the prefix
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            # Check if the page contains any objects
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    # Apply filter if specified
+                    if filter is None or filter in obj['Key']:
+                        count += 1
+        
+        return count
+    
+    except s3_client.exceptions.NoSuchBucket:
+        raise ValueError(f"Bucket '{bucket_name}' does not exist")
+    except Exception as e:
+        raise Exception(f"Error counting S3 items: {str(e)}")
+
+def audit_item(identifier, config):
+
+    bhl_object = BHL_Object(config, Identifier=identifier)
+    if bhl_object.object is None:
+        bhl_object = BHL_Object(config, ID=identifier)
+        if bhl_object.object is None:
+            print(f"Identifier/ID {identifier} is not in BHL. Stopping.")
+            sys.exit(1)
+
+    if bhl_object.type == 'virtual_item':
+        print(f"{bhl_object.identifier} is a virtual item. Stopping.")
+    id_zfill = str(bhl_object.id).zfill(6)
+    tag = f"{bhl_object.type}-{id_zfill}"
+
+    jp2_count      = count_s3_items("bhl-open-data", f"images/{bhl_object.identifier}/", ".jp2")
+    scandata_count = count_s3_items("bhl-open-data", f"scandata/{bhl_object.identifier}_scandata.xml", ".xml")
+    ocr_count      = count_s3_items("bhl-open-data", f"ocr/{tag}/", ".txt")
+    webp_count     = count_s3_items("bhl-open-data", f"web/{bhl_object.identifier}/", ".webp")
+
+    scandata_good = 'OK' if (scandata_count >= 1) else 'Not OK'
+    ocr_good = 'OK' if (jp2_count > 0 and (jp2_count + 1) <= ocr_count) else 'Not OK'
+    webp_good =  'OK' if (jp2_count > 0 and (jp2_count * 5) <= webp_count) else 'Not OK'
+    expected_ocr = jp2_count + 1
+    expected_webp = jp2_count * 5
+
+    return {
+        "identifier": bhl_object.identifier,
+        "tag": tag,
+        "jp2_count": jp2_count,
+        "scandata_count": scandata_count,
+        "scandata_good": scandata_good,
+        "ocr_count": ocr_count,
+        "expected_ocr": expected_ocr,
+        "ocr_good": ocr_good,
+        "webp_count": webp_count,
+        "expected_webp": expected_webp,
+        "webp_good": webp_good
+    }
