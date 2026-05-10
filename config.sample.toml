@@ -8,6 +8,7 @@ id_list = "item-ids.txt"
 # 8000 is reasonable and won't cause out of memory errors.
 # Note: This will still use up to 4 GB of resident RAM when resizing.
 max_image_dimension = "8000"
+user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0"
 
 [logging]
 path = "./logs"
@@ -33,3 +34,7 @@ concurrency = 1
 new_items = ""
 updated_items = ""
 ocr_only = ""
+
+[internet_archive]
+s3_access_key = ""
+s3_secret = ""

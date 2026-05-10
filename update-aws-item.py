@@ -54,7 +54,7 @@ tmp.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=f"{tmp}/{config['logging']['filename']}",
     format="%(asctime)s: %(module)s (%(levelname)s): %(message)s",
-    level=logging.INFO
+    level=logging.WARNING
 )
 logger = logging.getLogger("update-aws-item")
 logging.getLogger('pyvips').setLevel(logging.CRITICAL)
@@ -152,7 +152,7 @@ def get_scandata(identifier):
         # Download it from AWS.
         url = f"https://bhl-open-data.s3.us-east-2.amazonaws.com/scandata/{identifier}_scandata.xml"
         
-        temp_file = download_url(url, config['general']['scratch_path'], logger)
+        temp_file = download_url(url, config['general']['scratch_path'], logger, config)
         if temp_file is not None:
             os.rename(temp_file, scandata_file)
             logger.debug('Downloaded scandata from AWS')
@@ -160,7 +160,7 @@ def get_scandata(identifier):
             url = f"https://archive.org/download/{identifier}/{ia_scandata_file}"
             if ia_scandata_file.endswith('.zip'):
                 url = f"https://archive.org/download/{identifier}/{ia_scandata_file}/scandata.xml"
-            temp_file = download_url(url, config['general']['scratch_path'], logger)
+            temp_file = download_url(url, config['general']['scratch_path'], logger, config)
             if temp_file is not None:
                 os.rename(temp_file, scandata_file)
                 logger.debug('Downloaded scandata from IA')
@@ -227,7 +227,7 @@ def get_images(identifier):
         # Check again if we really need to download
         if not images_file.exists() or os.path.getsize(images_file) == 0:
             url = f"https://archive.org/download/{identifier}/{images_filename}"
-            temp_file = download_url(url, config['general']['scratch_path'], logger)
+            temp_file = download_url(url, config['general']['scratch_path'], logger, config)
             if temp_file is None:
                 logger.error('No image file found at IA')
                 return None
@@ -251,7 +251,7 @@ def download_file(identifier, type, use_cache=True):
         metadata_path.mkdir(parents=True, exist_ok=True)
         metadata_file = metadata_path / f"{identifier}.json"
         if not metadata_file.exists():
-            temp_file = download_url(f"https://archive.org/metadata/{identifier}", config['general']['scratch_path'], logger)
+            temp_file = download_url(f"https://archive.org/metadata/{identifier}", config['general']['scratch_path'], logger, config)
             if temp_file is not None:
                 os.rename(temp_file, metadata_file)
             else:
@@ -581,7 +581,7 @@ def get_ocr(identifier):
             # TODO Update download_url() to return a data stream
             # instead of a filename to save us from reopening a file
             # that we just saved
-            temp_file = download_url(url, config['general']['scratch_path'], logger)
+            temp_file = download_url(url, config['general']['scratch_path'], logger, config)
             if temp_file is not None:
                 os.rename(temp_file, ocr_filename)
                 # Read the file we just saved

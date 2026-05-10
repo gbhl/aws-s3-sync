@@ -4,7 +4,7 @@ import logging
 import time
 from pathlib import Path
 
-def download_url(Url, Temp_Path, Logger=None):
+def download_url(Url, Temp_Path, Logger=None, Config=None):
     """
     Reliably download a URL, handling 4xx and 5xx status codes
     with a cooldown and retry
@@ -18,9 +18,15 @@ def download_url(Url, Temp_Path, Logger=None):
     temp_name = next(tempfile._get_candidate_names())
     temp_filepath = Path(Temp_Path) / temp_name
 
+    header_vals = {}
+    if "archive.org" in Url:
+        key = Config['internet_archive']['s3_access_key']
+        secret = Config['internet_archive']['s3_secret']
+        header_vals['Authorization'] = f"LOW {key}{secret}"
+
     for attempt in range(max_retries):
         try:
-            response = requests.get(Url, stream=True)
+            response = requests.get(Url, stream=True, headers=header_vals)
             if response.status_code == 200:
                 if Logger is not None:
                     sz = -1
