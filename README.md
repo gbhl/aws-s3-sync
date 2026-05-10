@@ -8,16 +8,6 @@ Usage of this script relies on access to both BHL's API and permission to BHL's 
 
 The script takes into account inconsistencies at the Internet Archive as much as possible to normalize the data being sent to AWS. No changes are made to BHL itself when this script is running.
 
-## Installation
-
-This uses a virtual environment and requires Python 3.12 or greater and libvips for image manipulation.
-
-```
-python -m venv venv
-. venv/bin/activate
-pip install -r requirements.txt
-```
-
 ## Basic Usage
 
 ```
@@ -49,6 +39,35 @@ This will run eight (8) copies of the script until all items are processed. The 
 folder should be monitored for progress and output.
 
 `cat LIST.TXT | parallel -j 8 --delay 1s python update-aws-item.py --identifier`
+
+## Installation
+
+This uses a virtual environment and requires Python 3.12 or greater and libvips for image manipulation.
+
+```
+python -m venv venv
+. venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Optional installation
+
+#### Queue Monitor systemd service
+
+1. Edit the `bhl-aws-sync.service` and replace `/PATH/TO/INSTALL` with the installation path.
+2. Then copy it to to `/etc/systemd/system`
+3. Run `systemctl daemon-reload`
+4. Run `systemctl start bhl-aws-sync.service`
+5. Run `systemctl enable bhl-aws-sync.service`
+
+#### Log rotation
+
+Log rotation expects the Queue Qonitor systemd service to be installed. 
+
+1. Edit the `logrotate.txt` file and replace `/PATH/TO/INSTALL` with the installation path.
+2. Edit the `logrotate.txt` file and replace `USER` and `GROUP` with the correct owner/group of the logs folder.
+3. Copy and rename it to `/etc/logrotate.d/bhl-aws-sync`.
+4. Test with `logrotate -d /etc/logrotate.d/bhl-aws-sync`
 
 
 ## Options
