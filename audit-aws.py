@@ -4,6 +4,7 @@ import sys
 import os
 import toml
 import boto3
+import re
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -56,16 +57,22 @@ def main():
 
     identifier = sys.argv[1]
 
+    matched = re.match('^[0-9]+$', identifier)
+    if matched:
+        bhl_object = BHL_Object(config, ID=identifier)
+        identifier = bhl_object.identifier;
+    else:
+        bhl_object = BHL_Object(config, Identifier=identifier)
+
     os.makedirs("cache/data", exist_ok=True)
 
-
-    bhl_object = BHL_Object(config, Identifier=identifier)
     if bhl_object.object is None:
-        print("Identifier is not in BHL. Stopping.")
+        print(f"{identifier},NOT_IN_BHL")
         sys.exit(1)
 
     if bhl_object.type == 'virtual_item':
-        print(f"{Identifier} is a virtual item. Stopping.")
+        print(f"{identifier},VIRTUAL_ITEM")
+        sys.exit()
     id_zfill = str(bhl_object.id).zfill(6)
     tag = f"{bhl_object.type}-{id_zfill}"
 
@@ -80,12 +87,13 @@ def main():
     expected_ocr = jp2_count + 1
     expected_webp = jp2_count * 5
 
-    print(f"Summary:       {identifier} ({tag})")
-    print(f"  JP2 Files:   {jp2_count}")
-    print( "  ------------ Actual / Expected / (OK/Not-OK)")
-    print(f"  Scandata:    {scandata_count}/1 ({scandata_good})")
-    print(f"  OCR Files:   {ocr_count}/{expected_ocr} ({ocr_good})")
-    print(f"  WEBP Files:  {webp_count}/{expected_webp} ({webp_good})")
+    print(f"{identifier},{tag},{jp2_count},{scandata_good},{ocr_good},{webp_good}")
+    # print(f"Summary:       {identifier} ({tag})")
+    # print(f"  JP2 Files:   {jp2_count}")
+    # print( "  ------------ Actual / Expected / (OK/Not-OK)")
+    # print(f"  Scandata:    {scandata_count}/1 ({scandata_good})")
+    # print(f"  OCR Files:   {ocr_count}/{expected_ocr} ({ocr_good})")
+    # print(f"  WEBP Files:  {webp_count}/{expected_webp} ({webp_good})")
 
 if __name__ == "__main__":
     main()
