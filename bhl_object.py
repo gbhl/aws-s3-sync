@@ -5,7 +5,7 @@ import requests
 import json
 import os
 from pathlib import Path
-from bhl_aws_common import download_url
+import bhl_aws_common
 
 class BHL_Object:
     def __init__(self, Config, Identifier=None, ID=None, OCR=False, Logger=None):
@@ -42,7 +42,7 @@ class BHL_Object:
         else:
             return
 
-        temp_file = download_url(url, self.scratch_path, Logger=self.logger)
+        temp_file = bhl_aws_common.download_url(url, self.scratch_path, Logger=self.logger)
 
         # Let's hope we always get some data
         if temp_file is None:
@@ -79,7 +79,7 @@ class BHL_Object:
         else:
             return
 
-        temp_file = download_url(url, self.scratch_path, Logger=self.logger)
+        temp_file = bhl_aws_common.download_url(url, self.scratch_path, Logger=self.logger)
 
         if temp_file is None:
             return
