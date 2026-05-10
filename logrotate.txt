@@ -1,0 +1,11 @@
+/PATH/TO/INSTALL/monitor-queue.log /PATH/TO/INSTALL/update-aws-item.log {
+    rotate 5
+    su USER GROUP
+    missingok
+    notifempty
+    sharedscripts
+    compress
+    delaycompress
+    endscript
+}
+
