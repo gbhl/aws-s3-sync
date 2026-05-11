@@ -29,6 +29,7 @@ vhost = "/"
 username = "guest"
 password = "guest"
 concurrency = 1
+poll_interval = 10
 
 [queues]
 new_items = ""

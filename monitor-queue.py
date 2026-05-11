@@ -19,7 +19,6 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).parent.resolve()
 SCRIPT = PROJECT_DIR / 'update-aws-item.py'
-POLL_INTERVAL = 60  # seconds
 
 # Load config
 config_file = PROJECT_DIR / 'config.toml'
@@ -201,7 +200,7 @@ def main():
             new_procs = read_queues(rmq, queues, slots)
             processes.extend(new_procs)
 
-        time.sleep(POLL_INTERVAL)
+        time.sleep(config['rabbitmq']['poll_interval'])
 
 
 if __name__ == '__main__':
