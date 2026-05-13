@@ -361,6 +361,7 @@ def create_webp_files(identifier, input_dir, output_dir):
         logger.error(f"No JP2 files found in '{input_dir}'")
         sys.exit(1)
 
+    print(f"Looping. Reading from {input_dir} and sending to {output_dir}")
     # convert JP2 to full-size WEBP
     for j in jp2_files:
 
@@ -373,7 +374,6 @@ def create_webp_files(identifier, input_dir, output_dir):
         logger.debug(f"WebP Source: {jp2_base}.jp2")
 
         # Save full size webp
-
         try:
             img = pyvips.Image.new_from_file(input_file, access='sequential')
             img_w = img.width
@@ -386,10 +386,19 @@ def create_webp_files(identifier, input_dir, output_dir):
             if img_w > img_max_pixels or img_h > img_max_pixels:
                 logger.warning(f"Image {input_file} is too large ({img_w}x{img_h}). Resizing to {img_max_pixels} px.")
                 img = img.resize(img_max_pixels / max(img_w, img_h))
-            else: 
-                logger.debug(f"Image {input_file} size: {img_w} x {img_h}")
+                # get the sizes again since we resized the original file
+                img_w = img.width
+                img_h = img.height
 
-            img.write_to_file(output_file, Q=config['general']['webp_quality'])
+            logger.debug(f"Image {input_file} size: {img_w} x {img_h}")
+            if not output_file.exists():
+                img.write_to_file(output_file, Q=config['general']['webp_quality'])
+
+            # Since we use 'input_file' below for the thumbnails, point us to
+            # the webp file we just created
+            input_file = output_file
+
+
         except Exception as e:
             try:
                 logger.error(f"VIPS error for {jp2_base}.jp2: {e}")
@@ -401,13 +410,16 @@ def create_webp_files(identifier, input_dir, output_dir):
                 if img_w > img_max_pixels:
                     logger.warning(f"Image too large ({img_w}x{img_h}) Resizing to {img_max_pixels} px.")
                     img = img.resize(img_max_pixels, int(img_h * (img_max_pixels / img_w)))
+                    img_w, img_h = img.size
                 elif img_h > img_max_pixels:
                     logger.warning(f"Image too large ({img_w}x{img_h}) Resizing to {img_max_pixels} px.")
                     img = img.resize(int(img_w * (img_max_pixels / img_h)), img_max_pixels)
+                    img_w, img_h = img.size
 
                 img.compression_quality = config['general']['webp_quality']
                 img_webp = img.convert('webp')
-                img_webp.save(filename=output_file)
+                if not output_file.exists():
+                    img_webp.save(filename=output_file)
                 # Since we use 'input_file' below for the thumbnails, point us to
                 # the webp file we just created
                 input_file = output_file
@@ -417,23 +429,26 @@ def create_webp_files(identifier, input_dir, output_dir):
         # resize to webp
         for size_name in config['webp_sizes']:
             target_width = config['webp_sizes'][size_name]
-            logger.debug(f"WebP Source: {jp2_base}.jp2 -> {size_name}")
             # calculate the resize factors using the current width and the desired width
             # We don't upscale. So ensure the factor isn't < 1
             factor = min(target_width / img_w, 1)
             th_h = int(factor * img_h)
             th_w = int(factor * img_w)
+            logger.debug(f"WebP Source: {jp2_base}.jp2 -> {size_name} ({th_w}x{th_h}, {factor})")
 
             thumb_file = output_dir / f"{jp2_base}_{size_name}.webp"
 
             try:
                 if not thumb_file.exists():
-                    thumb = pyvips.Image.thumbnail(input_file, th_h)
+                    # Image.thumbnail scales to a square. Use max() to handle landscape images.
+                    thumb = pyvips.Image.thumbnail(input_file, max(th_w, th_h))
+
                     thumb.write_to_file(thumb_file)
                 
                 if os.path.getsize(thumb_file) == 0:
                     logger.warning(f"Thumbnail {input_file} was empty.")
-                    thumb = pyvips.Image.thumbnail(input_file, th_h)
+                    # Image.thumbnail scales to a square. Use max() to handle landscape images.
+                    thumb = pyvips.Image.thumbnail(input_file, max(th_w, th_h))
                     thumb.write_to_file(thumb_file)
             except Exception as e:
                 try: 
@@ -446,8 +461,7 @@ def create_webp_files(identifier, input_dir, output_dir):
                     img_webp = img.convert('webp')
                     img_webp.save(filename=thumb_file)
                 except Exception as e:
-                    logger.error(f"File {thumb_file} could not be saved. Continuing.")
-
+                    logger.error(f"File {thumb_file} could not be saved. Continuing.")    
 
     return(str(output_dir))
 
@@ -575,18 +589,18 @@ def get_ocr(identifier):
         if "OcrText" in bhl_object.pages[i]:
             ocr_text = bhl_object.pages[i]['OcrText']
         else:
-            url = bhl_object.pages[i]['OcrUrl']
-            logger.info(f"OCR URL {url}")
+            url = f"https://www.biodiversitylibrary.org/api3?op=GetPageMetadata&pageid={bhl_object.pages[i]['PageID']}&ocr=t&format=json&apikey={config['general']['bhl_api_key']}"
+            logger.info(f"OCR URL /api3?op=GetPageMetadata&pageid={bhl_object.pages[i]['PageID']}&ocr=t&format=json&apikey=API_KEY")
 
             # TODO Update download_url() to return a data stream
             # instead of a filename to save us from reopening a file
             # that we just saved
             temp_file = download_url(url, config['general']['scratch_path'], logger, config)
+            time.sleep(0.25)
             if temp_file is not None:
-                os.rename(temp_file, ocr_filename)
-                # Read the file we just saved
-                with open(ocr_filename, 'r') as file:
-                    ocr_text = file.read()
+                with open(temp_file, 'r') as file:
+                    ocr_object = json.load(file)
+                    ocr_text = ocr_object['Result'][0]['OcrText']
             else:
                 return None
 
@@ -688,6 +702,9 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
     # ---------------
     try:
         jp2_dir = None
+        scandata_file = None
+        jp2_file = None
+        json_file = None
         if Images:
             # Download scandata.xml
             # ---------------------
@@ -772,7 +789,6 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
                 os.remove(scandata_file)
             if jp2_file is not None:
                 os.remove(jp2_file)
-            json_file = download_file(Identifier, "metadata")
             if json_file is not None:
                 os.remove(json_file)
         else:
