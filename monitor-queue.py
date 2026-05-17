@@ -181,7 +181,7 @@ def main():
     rmq = config['rabbitmq']
     queues = config['queues']
     concurrency = int(rmq.get('concurrency', 1))
-    error_queue = queues.get('error_queue', '').strip() or None
+    error_queue_suffix = queues.get('error_queue_suffix', '').strip() or None
 
     logger.info(f"Starting monitor-queue (concurrency={concurrency})")
     logger.info(f"New Items: '{queues['new_items']}'  | Updates Items: '{queues['updated_items']}' | OCR queue: '{queues['ocr_only']}'")
