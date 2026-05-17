@@ -54,7 +54,7 @@ tmp.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     filename=f"{tmp}/{config['logging']['filename']}",
     format="%(asctime)s: %(module)s (%(levelname)s): %(message)s",
-    level=logging.WARNING
+    level=logging.INFO
 )
 logger = logging.getLogger("update-aws-item")
 logging.getLogger('pyvips').setLevel(logging.CRITICAL)
@@ -361,7 +361,6 @@ def create_webp_files(identifier, input_dir, output_dir):
         logger.error(f"No JP2 files found in '{input_dir}'")
         sys.exit(1)
 
-    print(f"Looping. Reading from {input_dir} and sending to {output_dir}")
     # convert JP2 to full-size WEBP
     for j in jp2_files:
 
@@ -660,7 +659,7 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
     if Verbose:
         # also send more noise if directed to
         logger.setLevel(logging.DEBUG)
-    
+
     # -------------------
     # Make sure we have a valid object
     # -------------------
