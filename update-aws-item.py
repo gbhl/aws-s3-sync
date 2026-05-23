@@ -26,6 +26,7 @@ import json
 import toml
 import tempfile
 import mimetypes
+import gc
 from PopLines import popHead
 from pathlib import Path
 from botocore.exceptions import NoCredentialsError
@@ -153,20 +154,23 @@ def get_scandata(identifier):
     if download:
         # TODO: how do we remember that we download from AWS? We don't need to re-upload later.        
         # Download it from AWS.
-        url = f"https://bhl-open-data.s3.us-east-2.amazonaws.com/scandata/{identifier}_scandata.xml"
-        
+
+        # 2026-05-18 - JMR - Always get the scandata from IA
+
+        # url = f"https://bhl-open-data.s3.us-east-2.amazonaws.com/scandata/{identifier}_scandata.xml"
+        # temp_file = download_url(url, config['general']['scratch_path'], logger, config)
+        # if temp_file is not None:
+        #     os.rename(temp_file, scandata_file)
+        #     logger.debug('Downloaded scandata from AWS')
+        # else:
+
+        url = f"https://archive.org/download/{identifier}/{ia_scandata_file}"
+        if ia_scandata_file.endswith('.zip'):
+            url = f"https://archive.org/download/{identifier}/{ia_scandata_file}/scandata.xml"
         temp_file = download_url(url, config['general']['scratch_path'], logger, config)
         if temp_file is not None:
             os.rename(temp_file, scandata_file)
-            logger.debug('Downloaded scandata from AWS')
-        else:
-            url = f"https://archive.org/download/{identifier}/{ia_scandata_file}"
-            if ia_scandata_file.endswith('.zip'):
-                url = f"https://archive.org/download/{identifier}/{ia_scandata_file}/scandata.xml"
-            temp_file = download_url(url, config['general']['scratch_path'], logger, config)
-            if temp_file is not None:
-                os.rename(temp_file, scandata_file)
-                logger.debug('Downloaded scandata from IA')
+            logger.debug('Downloaded scandata from IA')
 
     return scandata_file
 
@@ -321,6 +325,7 @@ def create_webp_files(identifier, input_dir, output_dir):
     """
     Process all JP2 images in the directory input_dir saing to output_dir
     """
+    # TODO Find the memory leak when creating WEBP files
     input_dir = Path(input_dir)
 
     # Make sure this exists, it should already exist
@@ -371,6 +376,8 @@ def create_webp_files(identifier, input_dir, output_dir):
             # Since we use 'input_file' below for the thumbnails, point us to
             # the webp file we just created
             input_file = output_file
+            img = None
+            del img
 
 
         except Exception as e:
@@ -397,6 +404,9 @@ def create_webp_files(identifier, input_dir, output_dir):
                 # Since we use 'input_file' below for the thumbnails, point us to
                 # the webp file we just created
                 input_file = output_file
+                img = None
+                del img
+
             except Exception as e:
                 logger.error(f"File {output_file} could not be saved. Continuing.")
 
@@ -416,14 +426,17 @@ def create_webp_files(identifier, input_dir, output_dir):
                 if not thumb_file.exists():
                     # Image.thumbnail scales to a square. Use max() to handle landscape images.
                     thumb = pyvips.Image.thumbnail(input_file, max(th_w, th_h))
-
                     thumb.write_to_file(thumb_file)
+                    del thumb
                 
                 if os.path.getsize(thumb_file) == 0:
                     logger.warning(f"Thumbnail {input_file} was empty.")
                     # Image.thumbnail scales to a square. Use max() to handle landscape images.
                     thumb = pyvips.Image.thumbnail(input_file, max(th_w, th_h))
                     thumb.write_to_file(thumb_file)
+                    thumb = None
+                    del thumb
+
             except Exception as e:
                 try: 
                     # Something went wrong, fall back to ImagageMagick Wand module
@@ -434,8 +447,13 @@ def create_webp_files(identifier, input_dir, output_dir):
                     img.compression_quality = config['general']['webp_quality']
                     img_webp = img.convert('webp')
                     img_webp.save(filename=thumb_file)
+                    img = None
+                    del img
+
                 except Exception as e:
                     logger.error(f"File {thumb_file} could not be saved. Continuing.")    
+
+        gc.collect()
 
     return(str(output_dir))
 
@@ -817,9 +835,9 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
                 sync_file_to_aws_s3(scandata_file, 'bhl-open-data', 'scandata')
 
         if Scandata and not Images:
-            scandata_file = get_ia_file(Identifier, type="scandata")
-            if scandata_file is None or jp2_file is None:
-                logger.error(f"Scandata for {Identifier} not found on Qumulo")
+            scandata_file = get_scandata(Identifier)
+            if scandata_file is None:
+                logger.error(f"Scandata for {Identifier} not found")
             else:
                 if DryRun:
                     logger.info('(dry run) Not uploading scandata to AWS')
