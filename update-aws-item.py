@@ -728,7 +728,7 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
     # ---------------
     # Check if we are only working with recently updated items at IA
     # ---------------
-    if True or OnlyIfRecent:
+    if OnlyIfRecent:
         logger.info("Checking modification times at IA.")
         # Get the dates of the files (jp2, scandata) at IA
         times = get_ia_modification_times(Identifier)
