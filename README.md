@@ -31,14 +31,18 @@ This will give a quick summary of the counts of items at AWS and compare to the 
 
 To process a list of items, this command may be useful:
 
-`while read -r $ID; do python update-aws-item.py --identifier $ID; done < LIST.TXT` 
+```
+while read -r $ID; do python update-aws-item.py --identifier $ID; done < LIST.TXT
+```
 
 The Linux `parallel` command may be used together with the same list of identifers to process multiple items at the same time. 
 
 This will run eight (8) copies of the script until all items are processed. The `./logs/` 
 folder should be monitored for progress and output.
 
-`cat LIST.TXT | parallel -j 8 --delay 1s python update-aws-item.py --identifier`
+```
+cat LIST.TXT | parallel -j 8 --delay 1s python update-aws-item.py --identifier
+```
 
 ## Installation
 
@@ -62,7 +66,7 @@ pip install -r requirements.txt
 
 #### Log rotation
 
-Log rotation expects the Queue Qonitor systemd service to be installed. 
+Log rotation expects the Queue Monitor systemd service to be installed. 
 
 1. Edit the `logrotate.txt` file and replace `/PATH/TO/INSTALL` with the installation path.
 2. Edit the `logrotate.txt` file and replace `USER` and `GROUP` with the correct owner/group of the logs folder.
@@ -71,8 +75,12 @@ Log rotation expects the Queue Qonitor systemd service to be installed.
 
 
 ## Options
+
 `--identifier IDENTIFIER`  
 Archive.org identifier for the item.
+
+`--id ID`  
+BHL ItemID number for the item.
 
 `--pop FILENAME`  
 FILENAME is a list of identifiers. Reads and removes the first line of the file and uses it as the identifier to be processed.
@@ -80,8 +88,14 @@ FILENAME is a list of identifiers. Reads and removes the first line of the file 
 `-i`, `--images-only`  
 Download JP2 images from IA, convert to WebP, send to AWS. This will prefer the locally cached IDENTIFIER_jp2.zip. Implies `--scandata-only`
 
+`-a`, `--scandata-only`  
+Download candata.xml from IA and sends to AWS.
+
 `-o`, `--ocr-only`  
 Downloads OCR file for each page from BHL ansend to AWS. Also uploads ne file of all combined OCR.
+
+`--ia-recent`
+Only continue if the relevant files (Scandata, Images, OCR) at AWS were last changed in the last 30 days. In other words, don't update AWS unnecessarily.
 
 `--clean`  
 Removes files from the local cache. Does not remove `scandata.xml`. Downloads all other files from the Internet Archive as needed.
@@ -90,10 +104,16 @@ Removes files from the local cache. Does not remove `scandata.xml`. Downloads al
 Outputs progress to STDOUT instead of the log file.
 
 `--keep-downloads`  
-Does not delete files downloaded to the cache and temp directories.
+Does not delete files downloaded to and created in the cache and temp directories.
 
 `--verbose`  
 Output many more details of progress.
+
+`--dryrun`  
+Performs all actions except uploading to AWS. Often used with --keep-downloads.
+
+`--aws-clean`
+Deletes all content at AWS (JP2, WebP, OCR) except scandata.xml. Requires interactive confirmation.
 
 `-h`, `--help`   
 Show a summary of the command line options.
@@ -171,43 +191,56 @@ When a new message appears on a queue, an instance of `update-aws-item.py` is ca
 The `concurrency` setting in the config file controls how many copies of `update-aws-item.py` can be running at the same time.
 
 
-## Auditing
+# Auditing
 
-The `audit-aws.py` script returns counts of files at AWS to compare to what is expected. A quick look indicates if an item needs to be uploaded or refreshed at AWS.
+The `audit-aws.py` script returns counts of files at AWS to compare to what is expected. A quick look indicates if an item needs to be uploaded or refreshed at AWS. This command also takes one option: `-c` or `--csv`  Returns output in a simple CSV format for easier analysis
 
-Example:
+## Standard Output
 
 ```
-Item Summary:  mobot31753002623988 (item-128881)
-JP2 Files:     499
--------------- Actual / Expected / (OK/Not-OK)
-Scandata:      2/1 (OK)
-OCR Files:     500/500 (OK)
-WEBP Files:    2495/2495 (OK)
+$ python audit-item.py wildflowersofbri02adam
+
+Summary:         wildflowersofbri02adam (item-202277)
+  JP2 Files:     336
+  IA Scandata:   336 Images
+  AWS Scandata:  336 Images
+  Scandata File: OK: Actual: 1 Expected: 1
+  WEBP Files:    OK: Actual: 1680 Expected: 1680
+  OCR Files:     OK: Actual: 337 Expected: 337
+```
+
+## CSV Output
+
+Example with the `--csv` option. The value are `OK` if the counts match those that are expected. A value of `--` indicates a Not-OK response.
+
+```
+$ python audit-item.py wildflowersofbri02adam --csv
+
+identifier,tag,jp2_count,scandata_good,ocr_good,webp_good,scandata_images_good
+wildflowersofbri02adam,item-202277,336,OK,OK,OK,OK
 ```
 
 ## Known bugs
 
+### Excess OCR
+
 * When OCR changes from a page realignment or insertion, existing OCR is not deleted at AWS and new OCR is uploaded. There are differences in the old and new filenames and the old are left on AWS. This is a bit wasteful and also causes a false positive error in the audit script, but the script is configured to allow this and report an OK status. Example:
 
 ```
-Summary:       notessurlledel00mail (item-048997)
-  JP2 Files:   654
-  ------------ Actual / Expected / (OK/Not-OK)
-  Scandata:    1/1 (OK)
-  OCR Files:   722/655 (OK)   <---- Actual is greater than Expected
-  WEBP Files:  3270/3270 (OK)
+Summary:         wildflowersofbri02adam (item-202277)
+  JP2 Files:     336
+  IA Scandata:   336 Images
+  AWS Scandata:  336 Images
+  Scandata File: OK: Actual: 1 Expected: 1
+  WEBP Files:    OK: Actual: 1722 Expected: 1680  <---- Actual is greater than Expected
+  OCR Files:     OK: Actual: 337 Expected: 337
 ```
 
-## Notes
+This can be resolved with the `--aws-clean` option, but is wasteful in that all processing is redone.
 
-### Scandata File
+# Notes
 
-As much as possible, this script will preserve the locally cached `scandata.xml` file to prevent it from deviating from the one used by BHL. There are no provisions in the script to remove the scandata file and re-download from the Internet Archive. 
-
-Therefore, it is important to begin using this script with a full collection of scandata.xml files for all items in BHL.
-
-### OCR File organization
+## OCR File organization
 
 _This section is a reference for those interestd in accessing the OCR content at AWS S3._
 
