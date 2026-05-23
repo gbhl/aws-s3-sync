@@ -51,25 +51,22 @@ stdout_handler.setFormatter(logging.Formatter("%(asctime)s: %(module)s (%(leveln
 logger.addHandler(stdout_handler)
 
 
-def publish_to_error_queue(rmq_config, error_queue_suffix, identifiers):
+def publish_to_error_queue(rmq_config, error_queue, identifier):
     """Publish a list of identifiers to the error queue."""
     try:
         connection = connect(rmq_config)
         channel = connection.channel()
-        for identifier, queue in identifiers:
-            error_queue = f"{queue}{error_queue_suffix}"
-            channel.queue_declare(queue=error_queue, durable=True)
-            channel.basic_publish(
-                exchange='',
-                routing_key=error_queue,
-                body=identifier.encode('utf-8'),
-                properties=pika.BasicProperties(delivery_mode=2),
-            )
-            logger.info(f"Re-queued failed identifier to '{error_queue}': {identifier}")
+        channel.queue_declare(queue=error_queue, durable=True)
+        channel.basic_publish(
+            exchange='',
+            routing_key=error_queue,
+            body=identifier.encode('utf-8'),
+            properties=pika.BasicProperties(delivery_mode=2),
+        )
+        logger.info(f"Re-queued failed identifier to '{error_queue}': {identifier}")
         connection.close()
     except Exception as e:
-        logger.error(f"Failed to publish to error queue '{error_queue}': {e}")
-        logger.error(f"Identifiers that were NOT re-queued: {identifiers}")
+        logger.error(f"Failed to publish {identifier} to error queue '{error_queue}': {e}")
 
 
 def check_processes(processes, rmq_config=None, error_queue_suffix=None):
@@ -89,12 +86,8 @@ def check_processes(processes, rmq_config=None, error_queue_suffix=None):
                 logger.info(f"Worker finished: {identifier}")
             else:
                 logger.warning(f"Worker exited with code {rc}: {identifier}")
-                failed.append(identifier, queue)
-
-    if failed and rmq_config and error_queue:
-        publish_to_error_queue(rmq_config, error_queue_suffix, failed)
-    elif failed:
-        logger.warning(f"No error queue configured — failed identifiers dropped: {failed}")
+                if rmq_config and error_queue_suffix:
+                    publish_to_error_queue(rmq_config, f"{queue}{error_queue_suffix}", identifier)
 
     return still_running
 
@@ -159,6 +152,8 @@ def read_queues(rmq_config, queues, slots):
 
         for queue, ocr_only in [(new_queue, False), (ocr_queue, True), (updated_queue, False)]:
             while len(spawned) < slots:
+                if queue == "":
+                    continue
                 message, tag = read_queue(channel, queue)
                 if message is None:
                     break
