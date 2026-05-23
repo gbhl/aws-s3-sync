@@ -46,14 +46,16 @@ def main():
     result = bhl_aws_common.audit_item(args.identifier, config)
 
     if args.csv:
-        print(f"{result['identifier']},{result['tag']},{result['jp2_count']},{result['scandata_good']},{result['ocr_good']},{result['webp_good']}")
+        print(f"identifier,tag,jp2_count,scandata_good,ocr_good,webp_good,scandata_images_good")
+        print(f"{result['identifier']},{result['tag']},{result['jp2_count']},{result['scandata_good']},{result['ocr_good']},{result['webp_good']},{result['scandata_images_good']}")
     else :
-        print(f"Summary:       {result['identifier']} ({result['tag']})")
-        print(f"  JP2 Files:   {result['jp2_count']}")
-        print( "  ------------ Actual / Expected")
-        print(f"  Scandata:    {result['scandata_count']}/1 ({result['scandata_good']})")
-        print(f"  OCR Files:   {result['ocr_count']}/{result['expected_ocr']} ({result['ocr_good']})")
-        print(f"  WEBP Files:  {result['webp_count']}/{result['expected_webp']} ({result['webp_good']})")
+        print(f"Summary:         {result['identifier']} ({result['tag']})")
+        print(f"  JP2 Files:     {result['jp2_count']}")
+        print(f"  IA Scandata:   {result['ia_pages_count']} Images")
+        print(f"  AWS Scandata:  {result['aws_pages_count']} Images")
+        print(f"  Scandata File: {result['scandata_good']}: Actual: {result['scandata_count']} Expected: 1")
+        print(f"  WEBP Files:    {result['webp_good']}: Actual: {result['webp_count']} Expected: {result['expected_webp']}")
+        print(f"  OCR Files:     {result['ocr_good']}: Actual: {result['ocr_count']} Expected: {result['expected_ocr']}")
 
 if __name__ == "__main__":
     main()

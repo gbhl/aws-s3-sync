@@ -6,7 +6,8 @@ If uploading images, reads scandata.xml and jp2.zip from IA,
 renames JP2 files sequentially when <addToAccessFormats> is true.
 Then converts each JP2 to a variety of smaller sized WebP files.
 
-If uploading scandata,
+Optionally clean content at AWS before uploading, retains local files
+that are created, and log output to the console as well as a log file.
 """
 import sys
 import os
@@ -32,6 +33,8 @@ from botocore.exceptions import NoCredentialsError
 from random import randint
 from wand.image import Image
 from bhl_aws_common import download_url
+from bhl_aws_common import parse_scandata
+from bhl_aws_common import count_s3_items
 from bhl_object import BHL_Object
 
 # Read the config.toml file
@@ -278,34 +281,6 @@ def download_file(identifier, type, use_cache=True):
 def get_namespace(element):
     m = re.match("{.*}", element.tag)
     return m.group(0) if m else ''
-
-def parse_scandata(xml_file, identifier):
-    """
-    Parse scandata.xml and return list of pages that should be added to access formats.
-    Returns list of tuples: (original_filename, should_add)
-    """
-    # Parse the XML
-    root = ET.parse(xml_file)
-    pages = []
-
-    namespace = get_namespace(root.getroot())
-
-    # Find all page elements
-    for page in root.findall('.//{0}page'.format(namespace)):
-        leaf_num = int(page.attrib['leafNum'])
-        add_to_access = page.find('{0}addToAccessFormats'.format(namespace))
-
-        if leaf_num is not None and add_to_access is not None: # and orig_name is not None:
-            should_add = add_to_access.text.lower() == 'true'
-            original_name = f"{identifier}_{leaf_num:04d}.jp2"
-
-            pages.append({
-                'leaf_num': leaf_num,
-                'orig_name': original_name,
-                'add_to_access': should_add
-            })
-
-    return pages
 
 def rename_jp2_files(zip_filename, pages, dest_dir, identifier):
     """
@@ -652,7 +627,59 @@ def combine_ocr(identifier, ocr_dir):
 
     return (fulltext_filename, base)
 
-def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False, Cleanup=True):
+def get_ia_modification_times(identifier):
+    global logger
+    global config
+    times = {}
+
+    metadata_file = download_url(f"https://archive.org/metadata/{identifier}", config['general']['scratch_path'], logger, config)
+
+    with open(metadata_file, 'r') as file:
+        metadata = json.load(file)
+
+    # Scandata Modification Time
+    times['scandata'] = 0
+    for file in metadata['files']:
+        if file['format'] == 'Scandata' or file['format'] == 'Scribe Scandata ZIP':
+            times['scandata'] = int(file['mtime'])
+
+    # Images Modification Time
+    images_filename = None
+    times['images'] = 0
+    for file in metadata['files']:
+        if (file['format'] == 'Single Page Processed JP2 Tar' or
+            file['format'] == 'Single Page Processed JP2 ZIP'):
+            images_filename = file['name']
+            times['images'] = int(file['mtime'])
+
+    if images_filename is None:
+        for file in metadata['files']:
+            if (file['format'] == 'Single Page Processed TIFF ZIP'):
+                images_filename = file['name']
+                times['images'] = int(file['mtime'])
+
+    if images_filename is None:
+        for file in metadata['files']:
+            if (file['format'] == 'Single Page Processed TIFF TAR'):
+                images_filename = file['name']
+                times['images'] = int(file['mtime'])
+
+    if images_filename is None:
+        for file in metadata['files']:
+            if (file['format'] == 'Single Page Original TIFF ZIP'):
+                images_filename = file['name']
+                times['images'] = int(file['mtime'])
+
+    # DJVU Modification Time
+    times['ocr'] = 0
+    for file in metadata['files']:
+        if file['format'] == 'Djvu XML':
+            times['ocr'] = int(file['mtime'])
+
+    return(times)
+
+
+def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False, Cleanup=True, AWSClean=False, OnlyIfRecent=False):
     # -------------------
     # Update the logger to write to logs/IDENTIFIER.log
     # -------------------
@@ -689,14 +716,47 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
         # TODO: Allow us to override on the CLI. We CAN continue, but we can't get OCR if it's not in BHL
         # TODO: Addendum: we can get the OCR from the DJVU/hOCR, but we'd be duplicating work.
         print(f"{Identifier} is not in BHL. Stopping.")
-        logging.error('Identifier is not in BHL. Stopping.')
+        logger.error('Identifier is not in BHL. Stopping.')
         sys.exit(1)
 
     if bhl_object.type == 'virtual_item':
         # If this is an item and it's a virtual item, we can't process it, so we check.
         print(f"{Identifier} is a virtual item. Stopping.")
-        logging.error(f"{Identifier} is a virtual item. Stopping.")
+        logger.error(f"{Identifier} is a virtual item. Stopping.")
         sys.exit(1)
+
+    # ---------------
+    # Check if we are only working with recently updated items at IA
+    # ---------------
+    if True or OnlyIfRecent:
+        logger.info("Checking modification times at IA.")
+        # Get the dates of the files (jp2, scandata) at IA
+        times = get_ia_modification_times(Identifier)
+        minus_30 = int(time.time()) - 2592000 # 30 days in seconds
+        if ((times['scandata'] > 0 and times['scandata'] < minus_30) or
+           (times['images'] > 0 and times['images'] < minus_30) or
+           (times['ocr'] > 0 and times['ocr'] < minus_30)):
+            logger.info("Not continuing. Files at IA are too old.")
+            sys.exit()
+        else: 
+            logger.info("Files at IA are new enough.")
+    
+    # ---------------
+    # Clean the item at AWS if required
+    # ---------------
+    if AWSClean:
+        id_zfill = str(bhl_object.id).zfill(6)
+        tag = f"{bhl_object.type}-{id_zfill}"   
+        file_count = 0
+        # TODO We should really count the things we are about to delete.
+        file_count += count_s3_items('bhl-open-data', f"images/{Identifier}")
+        file_count += count_s3_items('bhl-open-data', f"web/{Identifier}")
+        file_count += count_s3_items('bhl-open-data', f"ocr/{tag}")
+        confirm = input(f"About to delete {file_count} files at AWS (JP2, WebP, OCR). Continue? (Y/N) ")
+        if confirm.lower() == 'y':
+            clean_aws_files('bhl-open-data', f"images/{Identifier}")
+            clean_aws_files('bhl-open-data', f"web/{Identifier}")
+            clean_aws_files('bhl-open-data', f"ocr/{tag}")
 
     # ---------------
     # Handle what data to process
@@ -828,6 +888,24 @@ def clean_item(identifier):
     # if scandata_file.exists():
     #     os.remove(str(scandata_file))
 
+def clean_aws_files(bucket, prefix):
+    paginator = s3_client.get_paginator('list_objects_v2')
+    # get list of what to delete
+    pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
+
+    to_delete = dict(Objects=[])
+    for item in pages.search('Contents'):
+        to_delete['Objects'].append(dict(Key=item['Key']))
+        if len(to_delete['Objects']) >= 1000: # Can only delete 1000 at a time
+            c = len(to_delete['Objects'])
+            logger.info(f"Deleting {c} items from s3://{bucket}/{prefix}")
+            s3_client.delete_objects(Bucket=bucket, Delete=to_delete)
+            to_delete = dict(Objects=[])
+    if len(to_delete['Objects']): # delete remainder
+        c = len(to_delete['Objects'])
+        logger.info(f"Deleting {c} items from s3://{bucket}/{prefix}")
+        s3_client.delete_objects(Bucket=bucket, Delete=to_delete)
+
 def main():
     global bhl_object
     # Parse the command line
@@ -874,7 +952,7 @@ def main():
         help='Do not use existing files. Download all from Internet Archive.'
     )
     parser.add_argument(
-        '--stdout',
+        '-d', '--stdout',
         action='store_true',
         help='Output to STDOUT as well as the log file'
     )
@@ -884,7 +962,7 @@ def main():
         help='Don\'t delete downloaded files and derivatives in cache and temp directories.'
     )
     parser.add_argument(
-        '--verbose',
+        '-v', '--verbose',
         action='store_true',
         help='Output more info. (logging=DEBUG)'
     )
@@ -892,6 +970,17 @@ def main():
         '--dryrun',
         action='store_true',
         help='Do everything except upload to AWS'
+    )
+    parser.add_argument(
+        '--aws-clean',
+        action='store_true',
+        help='Delete JP2, WebP, and OCR files from AWS. (Requries confirmation)'
+    )
+    parser.add_argument(
+        '-r', '--ia-recent',
+        default=None,
+        action='store_true',
+        help='Process this item only if the relevant files at the Internet Archive are newer than 30 days old'
     )
     args = parser.parse_args()
 
@@ -903,13 +992,13 @@ def main():
     # If we got an identifier from the command line, use that.
     if args.identifier:
         Identifier = args.identifier
-        logging.info(f"Processing {Identifier}")
+        logger.info(f"Processing {Identifier}")
 
     # If we got an Item ID number from the command line, use that
     if args.id:
-        bhl_object = BHL_Object(config, ID=args.id, Logger=logging)
+        bhl_object = BHL_Object(config, ID=args.id, Logger=logger)
         Identifier = bhl_object.identifier
-        logging.info(f"Processing {Identifier} from ID {args.id}")
+        logger.info(f"Processing {Identifier} from ID {args.id}")
     
     # If we are told to use a file as queue, pop the first  
     # row from the file and use that.
@@ -931,7 +1020,9 @@ def main():
         StdOut = args.stdout,
         Verbose = args.verbose,
         DryRun = args.dryrun,
-        Cleanup = args.keep_downloads
+        Cleanup = args.keep_downloads,
+        AWSClean = args.aws_clean,
+        OnlyIfRecent = args.ia_recent
     )
 
 if __name__ == "__main__":

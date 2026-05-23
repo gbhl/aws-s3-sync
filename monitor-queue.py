@@ -127,10 +127,12 @@ def read_queue(channel, queue):
     return body.decode('utf-8').strip(), method.delivery_tag
 
 
-def start_worker(identifier, ocr_only=False):
+def start_worker(identifier, ocr_only=False, recent=False):
     cmd = [sys.executable, str(SCRIPT), '--identifier', identifier]
     if ocr_only:
         cmd.append('--ocr-only')
+    if recent:
+        cmd.append('--ia-recent')
     logger.info(f"Spawning: {' '.join(cmd)}")
     return subprocess.Popen(cmd, cwd=PROJECT_DIR)
 
@@ -150,7 +152,7 @@ def read_queues(rmq_config, queues, slots):
         connection = connect(rmq_config)
         channel = connection.channel()
 
-        for queue, ocr_only in [(new_queue, False), (ocr_queue, True), (updated_queue, False)]:
+        for queue, ocr_only, recent in [(new_queue, False, False), (ocr_queue, True, False), (updated_queue, False, True)]:
             while len(spawned) < slots:
                 if queue == "":
                     continue
@@ -159,7 +161,7 @@ def read_queues(rmq_config, queues, slots):
                     break
                 msg_parts = message.split("|")
                 identifier = msg_parts[2]
-                proc = start_worker(identifier, ocr_only=ocr_only)
+                proc = start_worker(identifier, ocr_only=ocr_only, recent=recent)
                 channel.basic_ack(delivery_tag=tag)
                 spawned.append((proc, identifier, queue))
 
