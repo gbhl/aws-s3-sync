@@ -51,16 +51,17 @@ stdout_handler.setFormatter(logging.Formatter("%(asctime)s: %(module)s (%(leveln
 logger.addHandler(stdout_handler)
 
 
-def publish_to_error_queue(rmq_config, error_queue, identifier):
+def publish_to_error_queue(rmq_config, error_queue, identifier, id):
     """Publish a list of identifiers to the error queue."""
     try:
         connection = connect(rmq_config)
         channel = connection.channel()
         channel.queue_declare(queue=error_queue, durable=True)
+        message = f"item|{id}|{identifier}"
         channel.basic_publish(
             exchange='',
             routing_key=error_queue,
-            body=identifier.encode('utf-8'),
+            body=message,
             properties=pika.BasicProperties(delivery_mode=2),
         )
         logger.info(f"Re-queued failed identifier to '{error_queue}': {identifier}")
@@ -77,17 +78,17 @@ def check_processes(processes, rmq_config=None, error_queue_suffix=None):
     """
     still_running = []
     failed = []
-    for p, identifier, queue in processes:
+    for p, identifier, id, queue in processes:
         rc = p.poll()
         if rc is None:
-            still_running.append((p, identifier, queue))
+            still_running.append((p, identifier, id, queue))
         else:
             if rc == 0:
                 logger.info(f"Worker finished: {identifier}")
             else:
                 logger.warning(f"Worker exited with code {rc}: {identifier}")
                 if rmq_config and error_queue_suffix:
-                    publish_to_error_queue(rmq_config, f"{queue}{error_queue_suffix}", identifier)
+                    publish_to_error_queue(rmq_config, f"{queue}{error_queue_suffix}", identifier, id)
 
     return still_running
 
@@ -127,8 +128,8 @@ def read_queue(channel, queue):
     return body.decode('utf-8').strip(), method.delivery_tag
 
 
-def start_worker(identifier, ocr_only=False, recent=False):
-    cmd = [sys.executable, str(SCRIPT), '--identifier', identifier]
+def start_worker(identifier, id=0, ocr_only=False, recent=False):
+    cmd = [sys.executable, str(SCRIPT), '--identifier', identifier , '--id', id]
     if ocr_only:
         cmd.append('--ocr-only')
     if recent:
@@ -161,9 +162,10 @@ def read_queues(rmq_config, queues, slots):
                     break
                 msg_parts = message.split("|")
                 identifier = msg_parts[2]
-                proc = start_worker(identifier, ocr_only=ocr_only, recent=recent)
+                id = msg_parts[1]
+                proc = start_worker(identifier, id=id, ocr_only=ocr_only, recent=recent)
                 channel.basic_ack(delivery_tag=tag)
-                spawned.append((proc, identifier, queue))
+                spawned.append((proc, identifier, id, queue))
 
         connection.close()
     except pika.exceptions.AMQPConnectionError as e:
@@ -181,7 +183,7 @@ def main():
     error_queue_suffix = queues.get('error_queue_suffix', '').strip() or None
 
     logger.info(f"Starting monitor-queue (concurrency={concurrency})")
-    logger.info(f"New Items: '{queues['new_items']}'  | Updates Items: '{queues['updated_items']}' | OCR queue: '{queues['ocr_only']}'")
+    logger.info(f"New Queue: '{queues['new_items']}' | Updated Queue: '{queues['updated_items']}' | OCR queue: '{queues['ocr_only']}'")
     if error_queue_suffix:
         logger.info(f"Error queue suffix: '{error_queue_suffix}'")
     else:

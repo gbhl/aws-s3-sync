@@ -679,7 +679,7 @@ def get_ia_modification_times(identifier):
     return(times)
 
 
-def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False, Cleanup=True, AWSClean=False, OnlyIfRecent=False):
+def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False, Cleanup=True, AWSClean=False, OnlyIfRecent=False):
     # -------------------
     # Update the logger to write to logs/IDENTIFIER.log
     # -------------------
@@ -709,7 +709,7 @@ def update_item(Identifier=None, Images=True, Scandata=True, OCR=True, StdOut=Fa
     # Make sure we have a valid object
     # -------------------
     if bhl_object is None:
-        bhl_object = BHL_Object(config, Identifier=Identifier, Logger=logger)
+        bhl_object = BHL_Object(config, Identifier=Identifier, ID=ID, Logger=logger)
 
     if bhl_object.object is None:
         # If it's not in BHL, we can't continue
@@ -988,32 +988,33 @@ def main():
     tmp = Path(config['general']['scratch_path'])
     tmp.mkdir(parents=True, exist_ok=True)
 
-    Identifier = None
     # If we got an identifier from the command line, use that.
-    if args.identifier:
+    Identifier = None
+    if args.identifier and args.id:
         Identifier = args.identifier
-        logger.info(f"Processing {Identifier}")
-
-    # If we got an Item ID number from the command line, use that
-    if args.id:
+        logger.info(f"Processing {args.identifier} (also got ID {args.id})")
+    elif args.identifier and not args.id: 
+        Identifier = args.identifier
+        logger.info(f"Processing {args.identifier}")
+    elif not args.identifier and args.id: 
         bhl_object = BHL_Object(config, ID=args.id, Logger=logger)
         Identifier = bhl_object.identifier
-        logger.info(f"Processing {Identifier} from ID {args.id}")
-    
-    # If we are told to use a file as queue, pop the first  
-    # row from the file and use that.
-    if Identifier is None and args.pop is not None: 
+        logger.info(f"Processing ID {args.id}")
+    elif args.pop is not None: 
+        # If we are told to use a file as queue, pop the first  
+        # row from the file and use that.
         Identifier = popHead(1, args.pop)[0]
 
-    if Identifier is None: 
+    if Identifier is None:
         print("No identifier found or provided.")
-        sys.exit(64)
+        sys.exit(2)
 
     if args.clean:
         clean_item(Identifier)
     
     update_item(
         Identifier = Identifier,
+        ID = args.id,
         Images = args.images_only,
         Scandata = args.scandata_only,
         OCR = args.ocr_only,
