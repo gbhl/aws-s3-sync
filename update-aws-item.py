@@ -224,6 +224,19 @@ def get_images(identifier):
                 images_filename = file['name']
                 images_mtime = file['mtime']
 
+    if images_filename is None:
+        for file in metadata['files']:
+            if (file['format'] == 'Single Page Processed JPEG Tar'):
+                images_filename = file['name']
+                images_mtime = file['mtime']
+
+    if images_filename is None:
+        for file in metadata['files']:
+            if (file['format'] == 'Single Page Original JPEG Tar'):
+                images_filename = file['name']
+                images_mtime = file['mtime']
+
+
     if download:
         # Download the images file
         if images_filename is None:

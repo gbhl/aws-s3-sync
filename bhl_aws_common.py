@@ -78,7 +78,12 @@ def parse_scandata(xml_file, identifier):
     Returns list of tuples: (original_filename, should_add)
     """
     # Parse the XML
-    root = ET.parse(xml_file)
+    try:
+        root = ET.parse(xml_file)
+    except Exception as e:
+        print(e)
+        return []
+
     pages = []
 
     namespace = get_namespace(root.getroot())
@@ -127,32 +132,50 @@ def count_s3_items(bucket, prefix, filter=None):
     except Exception as e:
         raise Exception(f"Error counting S3 items: {str(e)}")
 
-def audit_item(identifier, config):
-
+def audit_item(identifier, id, config):
+    ret = {
+        'identifier': identifier,
+        'tag': '',
+        'jp2_count': 0,
+        'scandata_count': 0,
+        'scandata_good': '--',
+        'aws_pages_count': 0,
+        'ia_pages_count': 0,
+        'ocr_count': 0,
+        'expected_ocr': 0,
+        'ocr_good': '--',
+        'webp_count': 0,
+        'expected_webp': 0,
+        'webp_good': '--',
+        'scandata_images_good': '--'
+    }
     # Get the BHL Objeect
-    bhl_object = BHL_Object(config, Identifier=identifier)
+    bhl_object = BHL_Object(config, Identifier=identifier, ID=id)
     if bhl_object.object is None:
         bhl_object = BHL_Object(config, ID=identifier)
         if bhl_object.object is None:
-            print(f"Identifier/ID {identifier} is not in BHL. Stopping.")
-            sys.exit(1)
+            ret['tag'] = 'NOT FOUND'
+            return(ret)
+    ret['identifier'] = bhl_object.identifier
 
     if bhl_object.type == 'virtual_item':
-        print(f"{bhl_object.identifier} is a virtual item. Stopping.")
+        ret['tag'] = 'VIRTUAL ITEM'
+        return(ret)
+
     id_zfill = str(bhl_object.id).zfill(6)
-    tag = f"{bhl_object.type}-{id_zfill}"
+    ret['tag'] = f"{bhl_object.type}-{id_zfill}"
 
     # Get counts of the files at AWS
-    jp2_count      = count_s3_items("bhl-open-data", f"images/{bhl_object.identifier}/", ".jp2")
-    scandata_count = count_s3_items("bhl-open-data", f"scandata/{bhl_object.identifier}_scandata.xml", ".xml")
-    ocr_count      = count_s3_items("bhl-open-data", f"ocr/{tag}/", ".txt")
-    webp_count     = count_s3_items("bhl-open-data", f"web/{bhl_object.identifier}/", ".webp")
+    ret['jp2_count']      = count_s3_items("bhl-open-data", f"images/{bhl_object.identifier}/", ".jp2")
+    ret['scandata_count'] = count_s3_items("bhl-open-data", f"scandata/{bhl_object.identifier}_scandata.xml", ".xml")
+    ret['ocr_count']      = count_s3_items("bhl-open-data", f"ocr/{ret['tag']}/", ".txt")
+    ret['webp_count']     = count_s3_items("bhl-open-data", f"web/{bhl_object.identifier}/", ".webp")
 
-    scandata_good = 'OK' if (scandata_count >= 1) else '--'
-    ocr_good = 'OK' if (jp2_count > 0 and (jp2_count + 1) <= ocr_count) else '--'
-    webp_good =  'OK' if (jp2_count > 0 and (jp2_count * 5) <= webp_count) else '--'
-    expected_ocr = jp2_count + 1
-    expected_webp = jp2_count * 5
+    ret['scandata_good'] = 'OK' if (ret['scandata_count'] >= 1) else '--'
+    ret['ocr_good'] = 'OK' if (ret['jp2_count'] > 0 and (ret['jp2_count'] + 1) <= ret['ocr_count']) else '--'
+    ret['webp_good'] =  'OK' if (ret['jp2_count'] > 0 and (ret['jp2_count'] * 5) <= ret['webp_count']) else '--'
+    ret['expected_ocr'] = ret['jp2_count'] + 1
+    ret['expected_webp'] = ret['jp2_count'] * 5
 
     # Get and count pages in the two scandata files
     aws_scandata_url = f"https://bhl-open-data.s3.us-east-2.amazonaws.com/scandata/{bhl_object.identifier}_scandata.xml"
@@ -168,22 +191,9 @@ def audit_item(identifier, config):
     aws_pages_to_include = [p for p in aws_pages if p['add_to_access']]
     ia_pages_to_include = [p for p in ia_pages if p['add_to_access']]
 
-    scandata_images_good = 'OK' if (len(aws_pages_to_include) > 0 and len(ia_pages_to_include) > 0 and 
-                                    len(aws_pages_to_include) == len(ia_pages_to_include)) else '--'
+    ret['scandata_images_good'] = 'OK' if (len(aws_pages_to_include) > 0 and len(ia_pages_to_include) > 0 and 
+                                           len(aws_pages_to_include) == len(ia_pages_to_include)) else '--'
 
-    return {
-        "identifier": bhl_object.identifier,
-        "tag": tag,
-        "jp2_count": jp2_count,
-        "scandata_count": scandata_count,
-        "scandata_good": scandata_good,
-        "aws_pages_count": len(aws_pages_to_include),
-        "ia_pages_count": len(ia_pages_to_include),
-        "ocr_count": ocr_count,
-        "expected_ocr": expected_ocr,
-        "ocr_good": ocr_good,
-        "webp_count": webp_count,
-        "expected_webp": expected_webp,
-        "webp_good": webp_good,
-        "scandata_images_good": scandata_images_good
-    }
+    ret['aws_pages_count'] = len(aws_pages_to_include)
+    ret['ia_pages_count'] = len(ia_pages_to_include)
+    return(ret)
