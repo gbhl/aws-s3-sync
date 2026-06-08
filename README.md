@@ -128,9 +128,11 @@ The script performs the following steps. Some steps will be skipped or performed
 
 3. If the `--clean` option was given, delete from the cache the `IDENTIFIER_jp2.zip` and the metadata downloaded from the Internet Archive.
 
-4. If it does not already exist in the cache, download and noramalize the scandata file from the Internet Archive. If the item has a `scandata.zip`, extract and rename the XML file to `IDENTIFIER_scandata.xml`
+4. If the item has been updated recently as defined by the `recently_updated_ttl` setting, stop processing.
 
-5. If Images are to be uploaded (`-i` or `--images-only` option):
+5. If it does not already exist in the cache, download and noramalize the scandata file from the Internet Archive. If the item has a `scandata.zip`, extract and rename the XML file to `IDENTIFIER_scandata.xml`
+
+6. If Images are to be uploaded (`-i` or `--images-only` option):
 
     1. Download and Normalize the images. If the `IDENTIFIER_jp2.zip` does not already exist in the cache, determine the image archive file at the Internet Archive. This is in order of preference: `jp2.zip`/`jp2.tar` or `tiff.zip`/`tiff.tar`. Other images archives are not supported. If TIFFs or a TAR file are received, the images are converted to JP2 or ZIPped as appropriate to create the `IDENTIFIER_jp2.zip`.
 
@@ -146,19 +148,19 @@ The script performs the following steps. Some steps will be skipped or performed
 
     4. Upload all files to AWS: JP2, WEBP, Scandata. (it is assumed that the scandata was not re-downloaded if it already existed.)
 
-6. If the Scandata is to be uploaded (`-s` or `--scandata-only` option):
+7. If the Scandata is to be uploaded (`-s` or `--scandata-only` option):
 
     This runs only if Images are not already being uploaded. 
 
     1. If the scandata is not in the cache. Download the scandata from the Internet Archive and upload it to AWS.
 
-7. If the OCR is to be uploaded (`-o` or `--ocr-only` option):
+8. If the OCR is to be uploaded (`-o` or `--ocr-only` option):
 
     1. Download the OCR from BHL (not from IA) and separate files, one per page, in parallel with the JP2 files. Note: If the item is an Item in BHL, then all OCR can be downloaded in one API call. If the item is a Part/Segment, then the OCR is downloaded one page at a time. This may hit rate limits when running in parallel.
 
     2. Upload the OCR files to AWS.
 
-8. Cleans up any temporary files (extracted JP2 and WEBP) that were created during processing. IA Item metadata, Scandata, JP2s and OCR files will remain in the local cache.
+9. Cleans up any temporary files (extracted JP2 and WEBP) that were created during processing. IA Item metadata, Scandata, JP2s and OCR files will remain in the local cache.
 
 ## Error handling
 
@@ -175,6 +177,7 @@ The script needs certain values.
 * BHL API Key (no default)
 * WebP Name and Sizes which should not be changed
 * Log path and filename
+* How long to wait before updating an item again (and a path to track lock files) 
 
 When running as a daemon on Linux
 * RabbitMQ message queue connection info
@@ -193,7 +196,25 @@ The `concurrency` setting in the config file controls how many copies of `update
 
 # Auditing
 
-The `audit-aws.py` script returns counts of files at AWS to compare to what is expected. A quick look indicates if an item needs to be uploaded or refreshed at AWS. This command also takes one option: `-c` or `--csv`  Returns output in a simple CSV format for easier analysis
+The `audit.py` script returns counts of files at AWS to compare to what is expected. A quick look indicates if something needs to be uploaded or refreshed at AWS. The script handles Items, Parts and Virtual Items. When a Virtual Item is supplied or found, all Parts in the Virtual Item are audited.
+
+## Options
+
+`--identifier IDENTIFIER`  
+Archive.org identifier for the item.
+
+`--id NUMBER`  
+BHL ItemID or PartID.
+
+`-r`, `--rss`
+Instead of getting an Identifier or ID from the command line, use the http://www.biodiversitylibrary.org/RecentRss/500 RSS feed
+
+`-c`, `--csv`
+Ouput results in a simple CSV format instead of the verbose output.
+
+`-d`, `--header`
+Include a CSV header row in the outut.
+
 
 ## Standard Output
 
