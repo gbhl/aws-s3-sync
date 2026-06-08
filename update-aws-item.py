@@ -678,6 +678,25 @@ def get_ia_modification_times(identifier):
 
     return(times)
 
+def is_recently_updated(identifier):
+    ru_path = Path(config['general']['recently_updated_path'])
+    ru_path.mkdir(parents=True, exist_ok=True)
+    ru_path = ru_path / f"{identifier}.txt"
+    if not ru_path.exists():
+        # Doesn't exist? Then it's not recently updated, so we record the file
+        with open(ru_path, 'w') as fp:
+            pass
+        return False
+    else:
+        # Exists, yes, but is it new or old?
+        mtime = os.stat(ru_path)
+        if (time.time() - mtime.st_mtime) > config['general']['recently_updated_ttl']:
+            # Too old, not recently updated
+            os.remove(str(ru_path))
+            return False
+        else:
+            # Too new, recently updated
+            return True
 
 def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False, Cleanup=True, AWSClean=False, OnlyIfRecent=False):
     # -------------------
@@ -704,6 +723,10 @@ def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, 
     if Verbose:
         # also send more noise if directed to
         logger.setLevel(logging.DEBUG)
+
+    if is_recently_updated(Identifier):
+        logger.info(f"{Identifier} was updated recently. Stopping.")
+        sys.exit(3)
 
     # -------------------
     # Make sure we have a valid object
@@ -883,6 +906,10 @@ def clean_item(identifier):
     images_file = get_cache_path(identifier, 'images') / f"{identifier}_jp2.zip"
     if images_file.exists():
         os.remove(str(images_file))
+
+    ru_path = Path(config['general']['recently_updated_path']) / f"{identifier}.txt"
+    if ru_path.exists():
+        os.remove(str(ru_path))
 
     # scandata_file = get_cache_path(identifier, 'scandata') / f"{identifier}_scandata.xml"
     # if scandata_file.exists():
