@@ -4,6 +4,7 @@ import tempfile
 import requests
 import json
 import os
+import re
 from pathlib import Path
 import bhl_aws_common
 
@@ -15,6 +16,7 @@ class BHL_Object:
         self.pages = None
         self.object = None
         self.type = None
+        self.parts = None
         self.api_key = Config['general']['bhl_api_key']
         self.scratch_path = Config['general']['scratch_path']
         self.logger = Logger
@@ -25,7 +27,7 @@ class BHL_Object:
         if self.object is None and self.identifier is not None:
             self.get_bhl_part()
 
-    def read_item_api(self, data_file):
+    def read_item_api(self, data_file, read_parts=False):
         if data_file is None:
             return(False)
 
@@ -41,12 +43,14 @@ class BHL_Object:
             elif 'BarCode' in self.object:
                 self.identifier = self.object['BarCode']
 
-            self.pages = self.object['Pages']
-
             if self.object['Source'] == "Virtual Item":
                 self.type = 'virtual_item'
             else:
                 self.type = 'item'
+                self.pages = self.object['Pages']
+
+            if self.object['Source'] == "Virtual Item" and read_parts:
+                self.parts = data['Result'][0]['Parts']
             return(True)
         
         # will return False if we found more than 1 result. 
@@ -69,6 +73,15 @@ class BHL_Object:
             os.remove(temp_file)
             if result:
                 return(True)
+        
+            # Didn't get anything on the Identifier, let's see if it's numeric and try ID instead
+            elif re.search("^[0-9]+$", self.identifier):
+                url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={self.identifier}&idtype=bhl&pages=t&ocr={ocr}&format=json&apikey={self.api_key}"
+                temp_file = bhl_aws_common.download_url(url, self.scratch_path, Logger=self.logger)
+                result = self.read_item_api(temp_file)
+                os.remove(temp_file)
+                if result:
+                    return(True)
                 
         if self.id is not None:
             url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={self.id}&idtype=bhl&pages=t&ocr={ocr}&format=json&apikey={self.api_key}"
@@ -79,6 +92,26 @@ class BHL_Object:
                 return(True)
 
         return(False)
+
+    def get_bhl_virtual_item(self):
+        """
+        Get the BHL metadata for an item. Uses either IA identifier or ID number.
+        Fills self with the type of the object ("item" or "virtual item"), ID Number and the Object
+        Returns True when an item is found, False otherwise
+        """
+        ocr = 't' if self.ocr else 'f'
+
+        url = None
+        if self.identifier is not None:
+            url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={self.identifier}&idtype=ia&parts=t&format=json&apikey={self.api_key}"
+            temp_file = bhl_aws_common.download_url(url, self.scratch_path, Logger=self.logger)
+            result = self.read_item_api(temp_file, read_parts=True)
+            os.remove(temp_file)
+            if result:
+                return(True)
+                
+        return(False)
+
 
     def get_bhl_part(self):
         """
