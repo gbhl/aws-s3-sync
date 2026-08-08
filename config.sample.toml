@@ -32,6 +32,8 @@ username = "guest"
 password = "guest"
 concurrency = 1
 poll_interval = 10
+backoff_delay = 300 # Seconds before we try again after an error
+max_attempts = 10 # How many errors before we give up?
 
 [queues]
 new_items = ""

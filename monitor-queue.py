@@ -16,6 +16,7 @@ import time
 import toml
 import pika
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 
 PROJECT_DIR = Path(__file__).parent.resolve()
 SCRIPT = PROJECT_DIR / 'update-aws-item.py'
@@ -51,44 +52,60 @@ stdout_handler.setFormatter(logging.Formatter("%(asctime)s: %(module)s (%(leveln
 logger.addHandler(stdout_handler)
 
 
-def publish_to_error_queue(rmq_config, error_queue, identifier, id):
-    """Publish a list of identifiers to the error queue."""
+def publish_to_queue(rmq_config, queue, message):
+    """Publish a message to a queue."""
     try:
         connection = connect(rmq_config)
         channel = connection.channel()
-        channel.queue_declare(queue=error_queue, durable=True)
-        message = f"item|{id}|{identifier}"
+        channel.queue_declare(queue=queue, durable=True)
         channel.basic_publish(
             exchange='',
-            routing_key=error_queue,
+            routing_key=queue,
             body=message,
             properties=pika.BasicProperties(delivery_mode=2),
         )
-        logger.info(f"Re-queued failed identifier to '{error_queue}': {identifier}")
         connection.close()
+        return True
     except Exception as e:
-        logger.error(f"Failed to publish {identifier} to error queue '{error_queue}': {e}")
+        logger.error(f"Failed to publish message to queue '{queue}': {e}")
+        return False
 
 
-def check_processes(processes, rmq_config=None, error_queue_suffix=None):
+def publish_to_error_queue(rmq_config, error_queue, msg_type, id, identifier):
+    """Publish an item to the error queue."""
+    message = format_message(msg_type, id, identifier)
+    if publish_to_queue(rmq_config, error_queue, message):
+        logger.info(f"Sent to error queue '{error_queue}': {identifier} (attempts exceeded)")
+
+
+def check_processes(processes, rmq_config=None, max_attempts=10, backoff_delay=300):
     """Remove finished subprocesses from the list and log their exit status.
 
-    If rmq_config and error_queue are provided, failed workers are re-published
-    to the error queue.
+    If a worker fails and rmq_config is provided:
+    - Re-queue with updated timestamp and attempt counter if max_attempts not reached
+    - Send to error queue if max_attempts exceeded
     """
     still_running = []
-    failed = []
-    for p, identifier, id, queue in processes:
+    for p, msg_dict, queue in processes:
         rc = p.poll()
         if rc is None:
-            still_running.append((p, identifier, id, queue))
+            still_running.append((p, msg_dict, queue))
         else:
+            identifier = msg_dict['identifier']
             if rc == 0:
                 logger.info(f"Worker finished: {identifier}")
             else:
                 logger.warning(f"Worker exited with code {rc}: {identifier}")
-                if rmq_config and error_queue_suffix:
-                    publish_to_error_queue(rmq_config, f"{queue}{error_queue_suffix}", identifier, id)
+                if rmq_config:
+                    attempts = msg_dict['attempts'] + 1
+                    if attempts >= max_attempts:
+                        error_queue = f"{queue}.error"
+                        publish_to_error_queue(rmq_config, error_queue, msg_dict['type'], msg_dict['id'], identifier)
+                    else:
+                        retry_time = (datetime.now(timezone.utc) + timedelta(seconds=backoff_delay)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                        new_message = format_message(msg_dict['type'], msg_dict['id'], identifier, retry_time, attempts)
+                        if publish_to_queue(rmq_config, queue, new_message):
+                            logger.info(f"Re-queued for retry (attempt {attempts}/{max_attempts}): {identifier}")
 
     return still_running
 
@@ -110,10 +127,61 @@ def connect(rmq_config):
     return pika.BlockingConnection(parameters)
 
 
+def get_current_timestamp():
+    """Return current UTC time as ISO-8601 string (seconds granularity)."""
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def parse_iso8601(timestamp_str):
+    """Parse ISO-8601 timestamp string to datetime object."""
+    return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+
+
+def is_future_timestamp(timestamp_str):
+    """Check if timestamp is in the future."""
+    try:
+        ts = parse_iso8601(timestamp_str)
+        now = datetime.now(timezone.utc)
+        return ts > now
+    except (ValueError, AttributeError):
+        return False
+
+
+def format_message(msg_type, id, identifier, timestamp=None, attempts=0):
+    """Format a message with up to 5 parts delimited by pipe."""
+    parts = [msg_type, str(id), str(identifier)]
+    if timestamp is not None:
+        parts.append(timestamp)
+        parts.append(str(attempts))
+    return '|'.join(parts)
+
+
+def parse_message(message):
+    """Parse a message into its components.
+
+    Returns a dict with keys: type, id, identifier, timestamp (or None), attempts (or 0)
+    """
+    parts = message.split('|')
+    result = {
+        'type': parts[0] if len(parts) > 0 else '',
+        'id': parts[1] if len(parts) > 1 else '',
+        'identifier': parts[2] if len(parts) > 2 else '',
+        'timestamp': parts[3] if len(parts) > 3 else None,
+        'attempts': 0,
+    }
+    if len(parts) > 4:
+        try:
+            result['attempts'] = int(parts[4])
+        except ValueError:
+            result['attempts'] = 0
+    return result
+
+
 def read_queue(channel, queue):
     """
     Fetch one message without blocking.
-    Returns (identifier, delivery_tag) or (None, None) if the queue is empty.
+    Returns (parsed_msg, delivery_tag) or (None, None) if the queue is empty.
+    parsed_msg is a dict with keys: type, id, identifier, timestamp, attempts
     """
     try:
         method, _properties, body = channel.basic_get(queue=queue, auto_ack=False)
@@ -123,9 +191,10 @@ def read_queue(channel, queue):
 
     if method is None:
         return None, None
-    
-    # TODO check this against Mike's queue data
-    return body.decode('utf-8').strip(), method.delivery_tag
+
+    message_str = body.decode('utf-8').strip()
+    parsed = parse_message(message_str)
+    return parsed, method.delivery_tag
 
 
 def start_worker(identifier, id=0, ocr_only=False, recent=False):
@@ -141,8 +210,10 @@ def start_worker(identifier, id=0, ocr_only=False, recent=False):
 def read_queues(rmq_config, queues, slots):
     """
     Open a connection, pull up to `slots` messages across both queues, and
-    return a list of spawned subprocesses.  New-items queue is preferred over 
+    return a list of spawned subprocesses.  New-items queue is preferred over
     ocr_items and updated-items.
+
+    Handles retry logic: messages with future timestamps are re-queued.
     """
     new_queue = queues['new_items']
     updated_queue = queues['updated_items']
@@ -157,15 +228,24 @@ def read_queues(rmq_config, queues, slots):
             while len(spawned) < slots:
                 if queue == "":
                     continue
-                message, tag = read_queue(channel, queue)
-                if message is None:
+                msg_dict, tag = read_queue(channel, queue)
+                if msg_dict is None:
                     break
-                msg_parts = message.split("|")
-                identifier = msg_parts[2]
-                id = msg_parts[1]
+
+                # Check if message has a future timestamp - if so, re-queue and skip
+                if msg_dict['timestamp'] and is_future_timestamp(msg_dict['timestamp']):
+                    message_str = format_message(msg_dict['type'], msg_dict['id'], msg_dict['identifier'], msg_dict['timestamp'], msg_dict['attempts'])
+                    if publish_to_queue(rmq_config, queue, message_str):
+                        logger.debug(f"Re-queued delayed message (not yet ready): {msg_dict['identifier']}")
+                    channel.basic_ack(delivery_tag=tag)
+                    continue
+
+                # Process the message
+                identifier = msg_dict['identifier']
+                id = msg_dict['id']
                 proc = start_worker(identifier, id=id, ocr_only=ocr_only, recent=recent)
                 channel.basic_ack(delivery_tag=tag)
-                spawned.append((proc, identifier, id, queue))
+                spawned.append((proc, msg_dict, queue))
 
         connection.close()
     except pika.exceptions.AMQPConnectionError as e:
@@ -180,9 +260,11 @@ def main():
     rmq = config['rabbitmq']
     queues = config['queues']
     concurrency = int(rmq.get('concurrency', 1))
+    backoff_delay = int(rmq.get('backoff_delay', 300))
+    max_attempts = int(rmq.get('max_attempts', 10))
     error_queue_suffix = queues.get('error_queue_suffix', '').strip() or None
 
-    logger.info(f"Starting monitor-queue (concurrency={concurrency})")
+    logger.info(f"Starting monitor-queue (concurrency={concurrency}, backoff_delay={backoff_delay}s, max_attempts={max_attempts})")
     logger.info(f"New Queue: '{queues['new_items']}' | Updated Queue: '{queues['updated_items']}' | OCR queue: '{queues['ocr_only']}'")
     if error_queue_suffix:
         logger.info(f"Error queue suffix: '{error_queue_suffix}'")
@@ -192,14 +274,14 @@ def main():
     processes = []
 
     while True:
-        processes = check_processes(processes, rmq_config=rmq, error_queue_suffix=error_queue_suffix)
+        processes = check_processes(processes, rmq_config=rmq, max_attempts=max_attempts, backoff_delay=backoff_delay)
         slots = concurrency - len(processes)
 
         if slots > 0:
             new_procs = read_queues(rmq, queues, slots)
             processes.extend(new_procs)
 
-        time.sleep(config['rabbitmq']['poll_interval'])
+        time.sleep(rmq['poll_interval'])
 
 
 if __name__ == '__main__':
