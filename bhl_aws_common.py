@@ -30,7 +30,7 @@ def download_url(Url, Temp_Path, Logger=None, Config=None):
 
     for attempt in range(max_retries):
         try:
-            response = requests.get(Url, stream=True, headers=header_vals)
+            response = requests.get(Url, stream=True, headers=header_vals, timeout=15)
             if response.status_code == 200:
                 bytes = 0
                 with open(temp_filepath, 'wb') as f:

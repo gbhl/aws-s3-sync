@@ -3,7 +3,7 @@ webp_quality = 50
 scratch_path = "./tmp"
 cache_path = "./cache"
 recently_updated_path = "./cache/recent"
-recently_updated_ttl = 900
+recently_updated_ttl = 900 # must be less than or equal to [rabbitmq] `backoff_delay`
 bhl_api_key = ''
 id_list = "item-ids.txt"
 # webp doesn't allow for more than 16,000 pixels

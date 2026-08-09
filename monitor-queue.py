@@ -57,7 +57,7 @@ def publish_to_queue(rmq_config, queue, message):
     try:
         connection = connect(rmq_config)
         channel = connection.channel()
-        channel.queue_declare(queue=queue, durable=True)
+        channel.queue_declare(queue=queue, durable=True, passive=True)
         channel.basic_publish(
             exchange='',
             routing_key=queue,
@@ -97,7 +97,7 @@ def check_processes(processes, rmq_config=None, max_attempts=10, backoff_delay=3
             else:
                 logger.warning(f"Worker exited with code {rc}: {identifier}")
                 if rmq_config:
-                    attempts = msg_dict['attempts'] + 1
+                    attempts = int(msg_dict['attempts']) + 1
                     if attempts >= max_attempts:
                         error_queue = f"{queue}.error"
                         publish_to_error_queue(rmq_config, error_queue, msg_dict['type'], msg_dict['id'], identifier)
@@ -167,13 +167,13 @@ def parse_message(message):
         'id': parts[1] if len(parts) > 1 else '',
         'identifier': parts[2] if len(parts) > 2 else '',
         'timestamp': parts[3] if len(parts) > 3 else None,
-        'attempts': 0,
+        'attempts': parts[4] if len(parts) > 4 else 0,
     }
-    if len(parts) > 4:
-        try:
-            result['attempts'] = int(parts[4])
-        except ValueError:
-            result['attempts'] = 0
+    # if len(parts) > 4:
+    #     try:
+    #         result['attempts'] = int(parts[4])
+    #     except ValueError:
+    #         result['attempts'] = 0
     return result
 
 
@@ -230,7 +230,8 @@ def read_queues(rmq_config, queues, slots):
                     continue
                 msg_dict, tag = read_queue(channel, queue)
                 if msg_dict is None:
-                    break
+                    # The queue is empty, let's not create a loop
+                    return
 
                 # Check if message has a future timestamp - if so, re-queue and skip
                 if msg_dict['timestamp'] and is_future_timestamp(msg_dict['timestamp']):
@@ -238,7 +239,9 @@ def read_queues(rmq_config, queues, slots):
                     if publish_to_queue(rmq_config, queue, message_str):
                         logger.debug(f"Re-queued delayed message (not yet ready): {msg_dict['identifier']}")
                     channel.basic_ack(delivery_tag=tag)
-                    continue
+                    # We requeued, so let's stop here. We'll create a loop if there is 
+                    # only one item in the queue and it's timestamp is in the future.
+                    return
 
                 # Process the message
                 identifier = msg_dict['identifier']
@@ -279,7 +282,8 @@ def main():
 
         if slots > 0:
             new_procs = read_queues(rmq, queues, slots)
-            processes.extend(new_procs)
+            if new_procs is not None:
+                processes.extend(new_procs)
 
         time.sleep(rmq['poll_interval'])
 
