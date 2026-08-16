@@ -231,7 +231,7 @@ def read_queues(rmq_config, queues, slots):
                 msg_dict, tag = read_queue(channel, queue)
                 if msg_dict is None:
                     # The queue is empty, let's not create a loop
-                    return
+                    break
 
                 # Check if message has a future timestamp - if so, re-queue and skip
                 if msg_dict['timestamp'] and is_future_timestamp(msg_dict['timestamp']):
