@@ -196,4 +196,9 @@ def audit_item(identifier, id, config):
 
     ret['aws_pages_count'] = len(aws_pages_to_include)
     ret['ia_pages_count'] = len(ia_pages_to_include)
+    
+    if aws_scandata_temp is not None:
+        Path.unlink(aws_scandata_temp)
+    if ia_scandata_temp is not None:
+        Path.unlink(ia_scandata_temp)
     return(ret)
