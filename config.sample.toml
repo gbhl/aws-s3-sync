@@ -1,5 +1,6 @@
 [general]
 webp_quality = 50
+jpeg_quality = 80
 scratch_path = "./tmp"
 cache_path = "./cache"
 recently_updated_path = "./cache/recent"

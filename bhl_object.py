@@ -70,7 +70,8 @@ class BHL_Object:
             url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={self.identifier}&idtype=ia&pages=t&ocr={ocr}&format=json&apikey={self.api_key}"
             temp_file = bhl_aws_common.download_url(url, self.scratch_path, Logger=self.logger)
             result = self.read_item_api(temp_file)
-            os.remove(temp_file)
+            if temp_file is not None:
+                os.remove(temp_file)
             if result:
                 return(True)
         
@@ -79,7 +80,8 @@ class BHL_Object:
                 url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={self.identifier}&idtype=bhl&pages=t&ocr={ocr}&format=json&apikey={self.api_key}"
                 temp_file = bhl_aws_common.download_url(url, self.scratch_path, Logger=self.logger)
                 result = self.read_item_api(temp_file)
-                os.remove(temp_file)
+                if temp_file is not None:
+                    os.remove(temp_file)
                 if result:
                     return(True)
                 
@@ -87,7 +89,8 @@ class BHL_Object:
             url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={self.id}&idtype=bhl&pages=t&ocr={ocr}&format=json&apikey={self.api_key}"
             temp_file = bhl_aws_common.download_url(url, self.scratch_path, Logger=self.logger)
             result = self.read_item_api(temp_file)
-            os.remove(temp_file)
+            if temp_file is not None:
+                os.remove(temp_file)
             if result:
                 return(True)
 
@@ -106,7 +109,8 @@ class BHL_Object:
             url = f"https://www.biodiversitylibrary.org/api3?op=GetItemMetadata&id={self.identifier}&idtype=ia&parts=t&format=json&apikey={self.api_key}"
             temp_file = bhl_aws_common.download_url(url, self.scratch_path, Logger=self.logger)
             result = self.read_item_api(temp_file, read_parts=True)
-            os.remove(temp_file)
+            if temp_file is not None:
+                os.remove(temp_file)
             if result:
                 return(True)
                 
@@ -164,6 +168,7 @@ class BHL_Object:
             self.get_bhl_item()
             return True
         elif self.type == 'part':
+            self.get_bhl_part()
             return True
         else:
             return False

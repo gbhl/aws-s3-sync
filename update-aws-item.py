@@ -334,7 +334,7 @@ def rename_jp2_files(zip_filename, pages, dest_dir, identifier):
                 logger.error(f"Could not find JP2 file for {orig_name}")
                 # return None
 
-def create_webp_files(identifier, input_dir, output_dir):
+def create_webp_files(identifier, input_dir, output_dir, jpeg_output_dir):
     """
     Process all JP2 images in the directory input_dir saing to output_dir
     """
@@ -362,14 +362,19 @@ def create_webp_files(identifier, input_dir, output_dir):
 
         input_file = input_dir / f"{jp2_base}.jp2"
         output_file = output_dir / f"{jp2_base}_full.webp"
-
-        logger.debug(f"WebP Source: {jp2_base}.jp2")
+        jpg_output_file = jpeg_output_dir / f"{jp2_base}.jpg"
 
         # Save full size webp
         try:
             img = pyvips.Image.new_from_file(input_file, access='sequential')
             img_w = img.width
             img_h = img.height
+
+            logger.debug(f"Image {input_file} size: {img_w} x {img_h}")
+
+            # Jpeg images are limited to 65535 x 65535 and we assume we will never have this size.
+            if not jpg_output_file.exists():
+                img.write_to_file(jpg_output_file, Q=config['general']['jpeg_quality'])
 
             # webp images are limited to 16383 x 16383 but this will cause memory problems
             # Scale the image down per the config setting
@@ -382,7 +387,6 @@ def create_webp_files(identifier, input_dir, output_dir):
                 img_w = img.width
                 img_h = img.height
 
-            logger.debug(f"Image {input_file} size: {img_w} x {img_h}")
             if not output_file.exists():
                 img.write_to_file(output_file, Q=config['general']['webp_quality'])
 
@@ -473,6 +477,7 @@ def create_webp_files(identifier, input_dir, output_dir):
 def sync_dir_to_aws_s3(source_path, pattern, bucket, prefix):
     s3_client = boto3.client('s3')
     upload_files = list(source_path.glob(pattern))
+    upload_files.sort()
 
     for file in upload_files:
         fsplit = os.path.split(file)
@@ -594,6 +599,7 @@ def get_ocr(identifier):
         if "OcrText" in bhl_object.pages[i]:
             ocr_text = bhl_object.pages[i]['OcrText']
         else:
+            # This should never be needed, but we leave it here just in case
             url = f"https://www.biodiversitylibrary.org/api3?op=GetPageMetadata&pageid={bhl_object.pages[i]['PageID']}&ocr=t&format=json&apikey={config['general']['bhl_api_key']}"
             logger.info(f"OCR URL /api3?op=GetPageMetadata&pageid={bhl_object.pages[i]['PageID']}&ocr=t&format=json&apikey=API_KEY")
 
@@ -711,7 +717,8 @@ def is_recently_updated(identifier):
             # Too new, recently updated
             return True
 
-def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, DryRun=False, Cleanup=True, AWSClean=False, OnlyIfRecent=False):
+def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, StdOut=False, Verbose=False, 
+                DryRun=False, Cleanup=True, AWSClean=False, AWSCleanOCR=False, OnlyIfRecent=False, Force=False):
     # -------------------
     # Update the logger to write to logs/IDENTIFIER.log
     # -------------------
@@ -737,7 +744,7 @@ def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, 
         # also send more noise if directed to
         logger.setLevel(logging.DEBUG)
 
-    if is_recently_updated(Identifier):
+    if is_recently_updated(Identifier) and not Force:
         logger.info(f"{Identifier} was updated recently. Stopping.")
         sys.exit(3)
 
@@ -784,7 +791,7 @@ def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, 
         id_zfill = str(bhl_object.id).zfill(6)
         tag = f"{bhl_object.type}-{id_zfill}"   
         file_count = 0
-        # TODO We should really count the things we are about to delete.
+        # Count the things we are about to delete.
         file_count += count_s3_items('bhl-open-data', f"images/{Identifier}")
         file_count += count_s3_items('bhl-open-data', f"web/{Identifier}")
         file_count += count_s3_items('bhl-open-data', f"ocr/{tag}")
@@ -793,6 +800,20 @@ def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, 
             clean_aws_files('bhl-open-data', f"images/{Identifier}")
             clean_aws_files('bhl-open-data', f"web/{Identifier}")
             clean_aws_files('bhl-open-data', f"ocr/{tag}")
+
+    # ---------------
+    # Clean the item at AWS if required
+    # ---------------
+    if AWSCleanOCR:
+        id_zfill = str(bhl_object.id).zfill(6)
+        tag = f"{bhl_object.type}-{id_zfill}"   
+        file_count = 0
+        # Count the things we are about to delete.
+        file_count += count_s3_items('bhl-open-data', f"ocr/{tag}")
+        # confirm = input(f"About to delete {file_count} OCR files at AWS. Continue? (Y/N) ")
+        # if confirm.lower() == 'y':
+        clean_aws_files('bhl-open-data', f"ocr/{tag}")
+        OCR = True
 
     # ---------------
     # Handle what data to process
@@ -832,12 +853,16 @@ def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, 
             logger.info('Images Download')
             images_file = download_file(Identifier, "images")
 
+            if images_file is None:
+                logger.error('Images not found or not downloaded.')
+                sys.exit(1)
+
             # guarantee we have a ZIP of JP2s
             logger.info('Images Normalize')
             jp2_file = normalize_images(Identifier, images_file)
 
             if jp2_file is None:
-                logger.error('Images not found')
+                logger.error('Images not normalized. Is the jp2.zip corrupt?')
                 sys.exit(1)
 
             # Parse scandata.xml
@@ -858,7 +883,9 @@ def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, 
             logger.info('Create WebP')
             webp_dir = jp2_dir / "webp"
             webp_dir.mkdir(parents=True, exist_ok=True)
-            create_webp_files(Identifier, jp2_dir, webp_dir)
+            jpg_dir = jp2_dir / "jpg"
+            jpg_dir.mkdir(parents=True, exist_ok=True)
+            create_webp_files(Identifier, jp2_dir, webp_dir, jpg_dir)
 
             # Send the webp files to Amazon
             # -----------------------------
@@ -868,6 +895,7 @@ def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, 
                 logger.info('Upload to AWS')
                 sync_dir_to_aws_s3(jp2_dir, '*.jp2', 'bhl-open-data', f"images/{Identifier}")
                 sync_dir_to_aws_s3(webp_dir, '*.webp', 'bhl-open-data', f"web/{Identifier}")
+                sync_dir_to_aws_s3(jpg_dir, '*.jpg', 'bhl-open-data', f"jpg/{Identifier}")
                 sync_file_to_aws_s3(scandata_file, 'bhl-open-data', 'scandata')
 
         if Scandata and not Images:
@@ -1017,6 +1045,16 @@ def main():
         help='Delete JP2, WebP, and OCR files from AWS. (Requries confirmation)'
     )
     parser.add_argument(
+        '--aws-clean-ocr',
+        action='store_true',
+        help='Delete only OCR files from AWS. (Requries confirmation)'
+    )
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Continue even if the item was recently updated'
+    )
+    parser.add_argument(
         '-r', '--ia-recent',
         default=None,
         action='store_true',
@@ -1063,7 +1101,9 @@ def main():
         DryRun = args.dryrun,
         Cleanup = args.keep_downloads,
         AWSClean = args.aws_clean,
-        OnlyIfRecent = args.ia_recent
+        AWSCleanOCR = args.aws_clean_ocr,
+        OnlyIfRecent = args.ia_recent,
+        Force = args.force
     )
 
 if __name__ == "__main__":
