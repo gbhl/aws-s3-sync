@@ -760,13 +760,13 @@ def update_item(Identifier=None, ID=None, Images=True, Scandata=True, OCR=True, 
         # TODO: Addendum: we can get the OCR from the DJVU/hOCR, but we'd be duplicating work.
         print(f"{Identifier} is not in BHL. Stopping.")
         logger.error('Identifier is not in BHL. Stopping.')
-        sys.exit(1)
+        sys.exit(3)
 
     if bhl_object.type == 'virtual_item':
         # If this is an item and it's a virtual item, we can't process it, so we check.
         print(f"{Identifier} is a virtual item. Stopping.")
         logger.error(f"{Identifier} is a virtual item. Stopping.")
-        sys.exit(1)
+        sys.exit()
 
     # ---------------
     # Check if we are only working with recently updated items at IA
