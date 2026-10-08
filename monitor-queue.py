@@ -147,9 +147,11 @@ def is_future_timestamp(timestamp_str):
         return False
 
 
-def format_message(msg_type, id, identifier, timestamp=None, attempts=0):
+def format_message(msg_type, id, identifier, force=False, timestamp=None, attempts=0):
     """Format a message with up to 5 parts delimited by pipe."""
-    parts = [msg_type, str(id), str(identifier)]
+    # Convert from a boolean
+    force_str = 'true' if force else 'false'
+    parts = [msg_type, str(id), str(identifier), force_str]
     if timestamp is not None:
         parts.append(timestamp)
         parts.append(str(attempts))
@@ -166,14 +168,12 @@ def parse_message(message):
         'type': parts[0] if len(parts) > 0 else '',
         'id': parts[1] if len(parts) > 1 else '',
         'identifier': parts[2] if len(parts) > 2 else '',
-        'timestamp': parts[3] if len(parts) > 3 else None,
-        'attempts': parts[4] if len(parts) > 4 else 0,
+        'force': parts[3] if len(parts) > 3 else 'false',
+        'timestamp': parts[4] if len(parts) > 4 else None,
+        'attempts': parts[5] if len(parts) > 5 else 0,
     }
-    # if len(parts) > 4:
-    #     try:
-    #         result['attempts'] = int(parts[4])
-    #     except ValueError:
-    #         result['attempts'] = 0
+    # Convert a boolean
+    result['force'] = True if result['force'] == 'true' else False
     return result
 
 
@@ -197,7 +197,7 @@ def read_queue(channel, queue):
     return parsed, method.delivery_tag
 
 
-def start_worker(identifier, id=0, ocr_only=False, recent=False):
+def start_worker(identifier, id=0, ocr_only=False, recent=False, force=False):
     cmd = [sys.executable, str(SCRIPT), '--identifier', identifier , '--id', id]
     if ocr_only:
         cmd.append('--ocr-only')
@@ -246,7 +246,8 @@ def read_queues(rmq_config, queues, slots):
                 # Process the message
                 identifier = msg_dict['identifier']
                 id = msg_dict['id']
-                proc = start_worker(identifier, id=id, ocr_only=ocr_only, recent=recent)
+                force = msg_dict['force']
+                proc = start_worker(identifier, id=id, ocr_only=ocr_only, recent=recent, force=force)
                 channel.basic_ack(delivery_tag=tag)
                 spawned.append((proc, msg_dict, queue))
 
