@@ -32,7 +32,7 @@ This will give a quick summary of the counts of items at AWS and compare to the 
 To process a list of items, this command may be useful:
 
 ```
-while read -r $ID; do python update-aws-item.py --identifier $ID; done < LIST.TXT
+while read -r ID; do python update-aws-item.py --identifier $ID; done < LIST.TXT
 ```
 
 The Linux `parallel` command may be used together with the same list of identifers to process multiple items at the same time. 
