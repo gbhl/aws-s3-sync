@@ -198,7 +198,7 @@ def read_queue(channel, queue):
 
 
 def start_worker(identifier, id=0, ocr_only=False, recent=False, force=False):
-    cmd = [sys.executable, str(SCRIPT), '--identifier', identifier , '--id', id]
+    cmd = [sys.executable, str(SCRIPT), '--dv', '--identifier', identifier , '--id', id]
     if ocr_only:
         cmd.append('--ocr-only')
     if recent:
