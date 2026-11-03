@@ -167,6 +167,7 @@ def audit_item(identifier, id, config):
 
     # Get counts of the files at AWS
     ret['jp2_count']      = count_s3_items("bhl-open-data", f"images/{bhl_object.identifier}/", ".jp2")
+    ret['jpeg_count']     = count_s3_items("bhl-open-data", f"jpg/{bhl_object.identifier}/", ".jpg")
     ret['scandata_count'] = count_s3_items("bhl-open-data", f"scandata/{bhl_object.identifier}_scandata.xml", ".xml")
     ret['ocr_count']      = count_s3_items("bhl-open-data", f"ocr/{ret['tag']}/", ".txt")
     ret['webp_count']     = count_s3_items("bhl-open-data", f"web/{bhl_object.identifier}/", ".webp")
@@ -174,6 +175,7 @@ def audit_item(identifier, id, config):
     ret['scandata_good'] = 'OK' if (ret['scandata_count'] >= 1) else '--'
     ret['ocr_good'] = 'OK' if (ret['jp2_count'] > 0 and (ret['jp2_count'] + 1) <= ret['ocr_count']) else '--'
     ret['webp_good'] =  'OK' if (ret['jp2_count'] > 0 and (ret['jp2_count'] * 5) <= ret['webp_count']) else '--'
+    ret['jpeg_good'] =  'OK' if (ret['jpeg_count'] == ret['jp2_count']) else '--'
     ret['expected_ocr'] = ret['jp2_count'] + 1
     ret['expected_webp'] = ret['jp2_count'] * 5
 

@@ -253,7 +253,7 @@ def get_images(identifier):
                 return None
                 
             os.rename(temp_file, images_file)
-            logger.debug(f"Downloaded images file: {download_reason}")
+            logger.debug(f"Downloaded images file. Reason: {download_reason}")
 
     else:
         logger.debug('Not downloading, JP2 file exists')
@@ -364,17 +364,21 @@ def create_webp_files(identifier, input_dir, output_dir, jpeg_output_dir):
         output_file = output_dir / f"{jp2_base}_full.webp"
         jpg_output_file = jpeg_output_dir / f"{jp2_base}.jpg"
 
-        # Save full size webp
+        # Save full size webp and jpg
         try:
             img = pyvips.Image.new_from_file(input_file, access='sequential')
             img_w = img.width
             img_h = img.height
 
-            logger.debug(f"Image {input_file} size: {img_w} x {img_h}")
+            logger.info(f"Image {input_file} size: {img_w} x {img_h}")
 
             # Jpeg images are limited to 65535 x 65535 and we assume we will never have this size.
             if not jpg_output_file.exists():
-                img.write_to_file(jpg_output_file, Q=config['general']['jpeg_quality'])
+                try:
+                    logger.debug(f"JPG Source: {jp2_base}.jp2 -> {jp2_base}.jpg")
+                    img.write_to_file(jpg_output_file, Q=config['general']['jpeg_quality'])
+                except Exception as e:
+                    logger.error(f"File {jp2_base}.jpg could not be saved. Continuing. (Error is {e})")
 
             # webp images are limited to 16383 x 16383 but this will cause memory problems
             # Scale the image down per the config setting
@@ -425,7 +429,8 @@ def create_webp_files(identifier, input_dir, output_dir, jpeg_output_dir):
                 del img
 
             except Exception as e:
-                logger.error(f"File {output_file} could not be saved. Continuing.")
+                logger.error(f"File {output_file} could not be saved. Continuing. (Error is {e})")
+                continue
 
         # resize to webp
         for size_name in config['webp_sizes']:
@@ -468,7 +473,7 @@ def create_webp_files(identifier, input_dir, output_dir, jpeg_output_dir):
                     del img
 
                 except Exception as e:
-                    logger.error(f"File {thumb_file} could not be saved. Continuing.")    
+                    logger.error(f"File {thumb_file} could not be saved. Continuing. (Error is {e})")    
 
         gc.collect()
 
@@ -963,12 +968,13 @@ def clean_aws_files(bucket, prefix):
 
     to_delete = dict(Objects=[])
     for item in pages.search('Contents'):
-        to_delete['Objects'].append(dict(Key=item['Key']))
-        if len(to_delete['Objects']) >= 1000: # Can only delete 1000 at a time
-            c = len(to_delete['Objects'])
-            logger.info(f"Deleting {c} items from s3://{bucket}/{prefix}")
-            s3_client.delete_objects(Bucket=bucket, Delete=to_delete)
-            to_delete = dict(Objects=[])
+        if item is not None:
+            to_delete['Objects'].append(dict(Key=item['Key']))
+            if len(to_delete['Objects']) >= 1000: # Can only delete 1000 at a time
+                c = len(to_delete['Objects'])
+                logger.info(f"Deleting {c} items from s3://{bucket}/{prefix}")
+                s3_client.delete_objects(Bucket=bucket, Delete=to_delete)
+                to_delete = dict(Objects=[])
     if len(to_delete['Objects']): # delete remainder
         c = len(to_delete['Objects'])
         logger.info(f"Deleting {c} items from s3://{bucket}/{prefix}")

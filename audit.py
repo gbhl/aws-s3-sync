@@ -24,27 +24,35 @@ with open('config.toml', 'r') as f:
 s3_session = boto3.Session('default')
 s3_client = boto3.client('s3', aws_session_token=s3_session)
 
-def print_header():
-    print(f"identifier,tag,jp2_count,scandata_good,ocr_good,webp_good,scandata_images_good")
+def print_header(more_info=False):
+    if more_info:
+        print(f"identifier,tag,jp2_count,jpeg_count,webp_count,expected_webp,ocr_count,expected_ocr,scandata_good,ocr_good,webp_good,scandata_images_good")
+    else:
+        print(f"identifier,tag,jp2_count,jpeg_count,scandata_good,ocr_good,webp_good,scandata_images_good")
 
-def print_results(data, as_csv=False, send_header=False):
+def print_results(data, as_csv=False, send_header=False, more_info=False):
     if as_csv:
         if send_header:
-            print_header()
+            print_header(more_info)
 
-        print(f"{data['identifier']},{data['tag']},{data['jp2_count']},{data['scandata_good']},{data['ocr_good']},{data['webp_good']},{data['scandata_images_good']}")
+        if more_info:
+            print(f"{data['identifier']},{data['tag']},{data['jp2_count']},{data['jpeg_count']},{data['webp_count']},{data['expected_webp']},{data['ocr_count']},{data['expected_ocr']},{data['scandata_good']},{data['ocr_good']},{data['webp_good']},{data['scandata_images_good']}")
+        else:
+            print(f"{data['identifier']},{data['tag']},{data['jp2_count']},{data['jpeg_count']},{data['scandata_good']},{data['ocr_good']},{data['webp_good']},{data['scandata_images_good']}")
     else :
         print(f"Summary:         {data['identifier']} ({data['tag']})")
         print(f"  JP2 Files:     {data['jp2_count']}")
+        print(f"  JPEG Files:    {data['jpeg_count']}")
         print(f"  IA Scandata:   {data['ia_pages_count']} Images")
         print(f"  AWS Scandata:  {data['aws_pages_count']} Images")
         print(f"  Scandata File: {data['scandata_good']}: Actual: {data['scandata_count']} Expected: 1")
         print(f"  WEBP Files:    {data['webp_good']}: Actual: {data['webp_count']} Expected: {data['expected_webp']}")
+        print(f"  JPEG Files:    {data['jpeg_good']}: Actual: {data['jpeg_count']} Expected: {data['jp2_count']}")
         print(f"  OCR Files:     {data['ocr_good']}: Actual: {data['ocr_count']} Expected: {data['expected_ocr']}")
 
-def audit_one(identifier, id=None, as_csv=False, send_header=False):
+def audit_one(identifier, id=None, as_csv=False, send_header=False, more_info=False):
     result = bhl_aws_common.audit_item(identifier, id, config)
-    print_results(result, as_csv, send_header)
+    print_results(result, as_csv, send_header, more_info)
 
     if result['tag'] == 'VIRTUAL ITEM':
         bhl_object = BHL_Object(config, Identifier=identifier, ID=id)
@@ -52,11 +60,11 @@ def audit_one(identifier, id=None, as_csv=False, send_header=False):
         if res:
             for part in bhl_object.parts:
                 result = bhl_aws_common.audit_item(part['SourceIdentifier'], None, config)
-                print_results(result, as_csv, False)
+                print_results(result, as_csv, False, more_info)
         else:
             print(f"Could not get parts for virtual item {bhl_object.identifier} / {bhl_object.id}")
 
-def audit_rss(as_csv=False, send_header=False):
+def audit_rss(as_csv=False, send_header=False, more_info=False):
     url = 'http://www.biodiversitylibrary.org/RecentRss/500'
     temp_file = bhl_aws_common.download_url(url, config['general']['scratch_path'])
     if temp_file is not None:
@@ -72,7 +80,7 @@ def audit_rss(as_csv=False, send_header=False):
         for link in root.findall('.//{0}link'.format(namespace)):
             link = link.text.split('/')
             if len(link) > 4:
-                audit_one(None, link[4], as_csv=as_csv, send_header=False)
+                audit_one(None, link[4], as_csv=as_csv, send_header=False, more_info=more_info)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -96,6 +104,11 @@ def main():
         help='Output results in CSV format.'
     )
     parser.add_argument(
+        '-m', '--more',
+        action='store_true',
+        help='Output extra information.'
+    )
+    parser.add_argument(
         '-d', '--header',
         action='store_true',
         help='Include CSV header row.'
@@ -112,9 +125,9 @@ def main():
         sys.exit(64)
 
     if args.identifier is not None or args.id is not None:
-        audit_one(args.identifier, args.id, as_csv=args.csv, send_header=args.header)
+        audit_one(args.identifier, args.id, as_csv=args.csv, send_header=args.header, more_info=args.more)
     elif args.rss: 
-        audit_rss(args.csv, args.header)
+        audit_rss(args.csv, args.header, more_info=args.more)
 
 
 if __name__ == "__main__":
