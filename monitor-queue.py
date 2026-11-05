@@ -198,11 +198,13 @@ def read_queue(channel, queue):
 
 
 def start_worker(identifier, id=0, ocr_only=False, recent=False, force=False):
-    cmd = [sys.executable, str(SCRIPT), '--dv', '--identifier', identifier , '--id', id]
+    cmd = [sys.executable, str(SCRIPT), '-dv', '--identifier', identifier , '--id', id]
     if ocr_only:
         cmd.append('--ocr-only')
-    if recent:
+    if recent and not force:
         cmd.append('--ia-recent')
+    if force:
+        cmd.append('--force')
     logger.info(f"Spawning: {' '.join(cmd)}")
     return subprocess.Popen(cmd, cwd=PROJECT_DIR)
 
