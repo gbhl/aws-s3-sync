@@ -103,7 +103,7 @@ def check_processes(processes, rmq_config=None, max_attempts=10, backoff_delay=3
                         publish_to_error_queue(rmq_config, error_queue, msg_dict['type'], msg_dict['id'], identifier)
                     else:
                         retry_time = (datetime.now(timezone.utc) + timedelta(seconds=backoff_delay)).strftime('%Y-%m-%dT%H:%M:%SZ')
-                        new_message = format_message(msg_dict['type'], msg_dict['id'], identifier, retry_time, attempts)
+                        new_message = format_message(msg_dict['type'], identifier, msg_dict['id'], msg_dict['force'], retry_time, attempts)
                         if publish_to_queue(rmq_config, queue, new_message):
                             logger.info(f"Re-queued for retry (attempt {attempts}/{max_attempts}): {identifier}")
 
