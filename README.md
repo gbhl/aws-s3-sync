@@ -66,13 +66,22 @@ pip install -r requirements.txt
 
 #### Log rotation
 
-Log rotation expects the Queue Monitor systemd service to be installed. 
+Log rotation expects the Queue Monitor systemd service to be installed. Create `/etc/logrotate.d/bhl-aws-sync` with this content, replacing `/PATH/TO/INSTALL` with the installation path and `USER` and `GROUP` with the owner/group of the `logs` folder.
 
-1. Edit the `logrotate.txt` file and replace `/PATH/TO/INSTALL` with the installation path.
-2. Edit the `logrotate.txt` file and replace `USER` and `GROUP` with the correct owner/group of the logs folder.
-3. Copy and rename it to `/etc/logrotate.d/bhl-aws-sync`.
-4. Test with `logrotate -d /etc/logrotate.d/bhl-aws-sync`
+Test with `logrotate -d /etc/logrotate.d/bhl-aws-sync`
 
+```
+/PATH/TO/INSTALL/monitor-queue.log /PATH/TO/INSTALL/update-aws-item.log {
+    rotate 5
+    su USER GROUP
+    missingok
+    notifempty
+    sharedscripts
+    compress
+    delaycompress
+    endscript
+}
+```
 
 ## Options
 
